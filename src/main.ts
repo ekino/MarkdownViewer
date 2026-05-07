@@ -280,30 +280,45 @@ async function openExamples(): Promise<void> {
   await setRootPath(examplesPath);
 }
 
+type PendingOpen =
+  | { kind: "file"; path: string }
+  | { kind: "folder"; path: string };
+
+async function openFileFromPath(filePath: string): Promise<void> {
+  const lastSep = filePath.lastIndexOf("/");
+  const parentDir = filePath.substring(0, lastSep);
+  const fileName = filePath.substring(lastSep + 1);
+  await setRootPath(parentDir, fileName);
+}
+
 async function init(): Promise<void> {
   await initTheme();
   const appWindow = getCurrentWindow();
 
-  // Listen for CLI argument passed via Tauri event
+  // Runtime opens (hot-start file association, "Open With", CLI events)
   appWindow.listen<string>("open-folder", (event) => {
     setRootPath(event.payload);
   });
-
-  // Listen for file open (via "Open With" or CLI with a file path)
   appWindow.listen<string>("open-file", (event) => {
-    const filePath = event.payload;
-    const lastSep = filePath.lastIndexOf("/");
-    const parentDir = filePath.substring(0, lastSep);
-    const fileName = filePath.substring(lastSep + 1);
-    setRootPath(parentDir, fileName);
+    openFileFromPath(event.payload);
   });
-
-  // Listen for menu "Open Folder" (Cmd+O)
   appWindow.listen("menu-open-folder", () => {
     openFolder();
   });
 
-  // Try restoring last folder
+  // Cold-start: pull anything the backend buffered (CLI arg or RunEvent::Opened
+  // that fired before our listener was registered). A pending open wins over
+  // the saved folder so the user doesn't see a flash of the previous folder.
+  const pending = await invoke<PendingOpen | null>("get_pending_open");
+  if (pending?.kind === "file") {
+    await openFileFromPath(pending.path);
+    return;
+  }
+  if (pending?.kind === "folder") {
+    await setRootPath(pending.path);
+    return;
+  }
+
   const saved = await loadRootPath();
   if (saved) {
     await setRootPath(saved);

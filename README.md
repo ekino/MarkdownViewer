@@ -92,6 +92,9 @@ npm install
 # Run in development mode
 npm run tauri dev
 
+# Build local debug bundle (.app + .dmg) without signing
+APPLE_SIGNING_IDENTITY="-" npm run tauri build -- --debug    
+
 # Build for production (.app + .dmg)
 npm run tauri build
 ```

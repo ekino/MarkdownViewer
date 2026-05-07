@@ -1,6 +1,28 @@
 use std::path::Path;
-use tauri::Emitter;
+use std::sync::{Mutex, OnceLock};
 use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+use tauri::{Emitter, Manager};
+
+#[derive(Clone, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum PendingOpen {
+    File { path: String },
+    Folder { path: String },
+}
+
+// Global slot — available from process start, so `RunEvent::Opened` can write
+// safely even if it fires before `setup` finishes (which can happen on macOS
+// cold-start via Apple Events).
+static PENDING_OPEN: OnceLock<Mutex<Option<PendingOpen>>> = OnceLock::new();
+
+fn pending_slot() -> &'static Mutex<Option<PendingOpen>> {
+    PENDING_OPEN.get_or_init(|| Mutex::new(None))
+}
+
+#[tauri::command]
+fn get_pending_open() -> Option<PendingOpen> {
+    pending_slot().lock().ok().and_then(|mut g| g.take())
+}
 
 #[tauri::command]
 fn print_webview(webview: tauri::Webview) -> Result<(), String> {
@@ -60,7 +82,11 @@ async fn export_pdf(_output_path: String) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run(path_arg: Option<String>) {
     let app = tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![print_webview, export_pdf])
+        .invoke_handler(tauri::generate_handler![
+            print_webview,
+            export_pdf,
+            get_pending_open
+        ])
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -90,23 +116,20 @@ pub fn run(path_arg: Option<String>) {
                 }
             });
 
-            // Pass CLI arg to frontend — detect file vs folder
+            // Buffer CLI arg so the frontend can pull it on init
             if let Some(ref path_str) = path_arg {
                 let path = Path::new(path_str);
-                let handle = app.handle().clone();
-
-                if path.is_file() {
-                    let file_path = path_str.clone();
-                    tauri::async_runtime::spawn(async move {
-                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                        let _ = handle.emit("open-file", file_path);
-                    });
+                let pending = if path.is_file() {
+                    Some(PendingOpen::File { path: path_str.clone() })
                 } else if path.is_dir() {
-                    let folder = path_str.clone();
-                    tauri::async_runtime::spawn(async move {
-                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                        let _ = handle.emit("open-folder", folder);
-                    });
+                    Some(PendingOpen::Folder { path: path_str.clone() })
+                } else {
+                    None
+                };
+                if let Some(p) = pending {
+                    if let Ok(mut slot) = pending_slot().lock() {
+                        *slot = Some(p);
+                    }
                 }
             }
 
@@ -128,7 +151,20 @@ pub fn run(path_arg: Option<String>) {
             for url in urls {
                 if let Ok(path) = url.to_file_path() {
                     if path.is_file() {
-                        let _ = app_handle.emit("open-file", path.to_string_lossy().to_string());
+                        let path_str = path.to_string_lossy().to_string();
+                        // Buffer for cold-start (frontend may not be listening yet)
+                        // and emit for hot-start (frontend is up).
+                        if let Ok(mut slot) = pending_slot().lock() {
+                            *slot = Some(PendingOpen::File { path: path_str.clone() });
+                        }
+                        let _ = app_handle.emit("open-file", path_str);
+
+                        let windows = app_handle.webview_windows();
+                        if let Some(win) = windows.values().next() {
+                            let _ = win.unminimize();
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                        }
                     }
                 }
             }
