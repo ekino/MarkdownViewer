@@ -116,6 +116,24 @@ describe("findMatches", () => {
     const idx = buildIndex(c, DEFAULT_OPTS);
     expect(findMatches(idx, "", DEFAULT_OPTS)).toHaveLength(0);
   });
+
+  it("caps results at MAX_HITS (1000)", () => {
+    const c = makeContainer(`<p>${"x ".repeat(2000)}</p>`);
+    const idx = buildIndex(c, DEFAULT_OPTS);
+    const hits = findMatches(idx, "x", DEFAULT_OPTS);
+    expect(hits).toHaveLength(1000);
+  });
+
+  it("matches text adjacent to an excluded node without leaking into it", () => {
+    const c = makeContainer(
+      [
+        '<p>before <span class="katex">match-inside</span> after-match</p>',
+      ].join("")
+    );
+    const idx = buildIndex(c, DEFAULT_OPTS);
+    const hits = findMatches(idx, "match", DEFAULT_OPTS);
+    expect(hits).toHaveLength(1);
+  });
 });
 
 describe("normalizeQuery", () => {

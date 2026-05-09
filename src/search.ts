@@ -134,10 +134,11 @@ export function normalizeWithMap(
     if (!opts.caseSensitive) {
       mapped = mapped.toLocaleLowerCase();
     }
-    let remaining = mapped.length;
-    while (remaining > 0) {
+    // Push one entry per UTF-16 code unit of `mapped` (not code point), so the
+    // map aligns with `String.prototype.indexOf` results in `findMatches`.
+    // biome-ignore lint/style/useForOf: counter loop, not iterating array
+    for (let unit = 0; unit < mapped.length; unit++) {
       offsets.push(i);
-      remaining--;
     }
     out += mapped;
   }
@@ -258,7 +259,19 @@ function applyCSSHighlights(ranges: Range[], currentIndex: number): void {
   }
   const HighlightCtor = Highlight as unknown as new (...r: Range[]) => unknown;
   reg.set(HIGHLIGHT_NAME, new HighlightCtor(...ranges));
+  updateCSSCurrentHighlight(ranges, currentIndex);
+}
+
+function updateCSSCurrentHighlight(
+  ranges: Range[],
+  currentIndex: number
+): void {
+  const reg = (CSS as unknown as CSSWithHighlights).highlights;
+  reg.delete(HIGHLIGHT_CURRENT_NAME);
   if (currentIndex >= 0 && ranges[currentIndex]) {
+    const HighlightCtor = Highlight as unknown as new (
+      ...r: Range[]
+    ) => unknown;
     reg.set(HIGHLIGHT_CURRENT_NAME, new HighlightCtor(ranges[currentIndex]));
   }
 }
@@ -339,6 +352,15 @@ export function createSearchController(
     index = null;
   }
 
+  function refreshCurrent(): void {
+    if (supportsCSSHighlights) {
+      updateCSSCurrentHighlight(ranges, currentIndex);
+      return;
+    }
+    // Fallback path: full re-apply (DOM is mutated either way).
+    applyHighlights();
+  }
+
   function getState(): SearchState {
     return {
       current: currentIndex,
@@ -404,7 +426,7 @@ export function createSearchController(
       return;
     }
     currentIndex = (currentIndex + 1) % ranges.length;
-    applyHighlights();
+    refreshCurrent();
     scrollToCurrent();
     notify();
   }
@@ -414,7 +436,7 @@ export function createSearchController(
       return;
     }
     currentIndex = (currentIndex - 1 + ranges.length) % ranges.length;
-    applyHighlights();
+    refreshCurrent();
     scrollToCurrent();
     notify();
   }
