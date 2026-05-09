@@ -4,6 +4,48 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.0](https://github.com/ekino/MarkdownViewer/releases/tag/v0.9.0) - 2026-05-09
+
+### Added
+
+- In-document full-text search bar in a new custom title bar (macOS Overlay style, native traffic lights preserved)
+- Accent-insensitive search by default, with case-sensitive and whole-word toggles via an options popover
+- Cmd+F focuses the search input, Cmd+G / Shift+Cmd+G navigate matches, Esc clears the query
+- Open files directly by double-clicking them in Finder
+
+### Changed
+
+- PDF, Print and Theme buttons moved from the sidebar header to the new title bar
+
+## [0.8.1](https://github.com/ekino/MarkdownViewer/releases/tag/v0.8.1) - 2026-03-31
+
+### Added
+
+- Local image support in markdown via the Tauri asset protocol
+- Screenshot gallery on the documentation site with click-to-zoom (medium-zoom)
+- Hero screenshot on the landing page
+- Ekino logo in the header, footer and README
+
+### Changed
+
+- Update repository references to `ekino/MarkdownViewer`
+
+### Fixed
+
+- Make medium-zoom work for both the hero and gallery screenshots
+
+## [0.8.0](https://github.com/ekino/MarkdownViewer/releases/tag/v0.8.0) - 2026-03-10
+
+### Added
+
+- Open external links in the system browser instead of inside the app
+
+## [0.7.0](https://github.com/ekino/MarkdownViewer/releases/tag/v0.7.0) - 2026-02-28
+
+### Added
+
+- Windows build in the CI and release workflows
+
 ## [0.6.0](https://github.com/ekino/MarkdownViewer/releases/tag/v0.6.0) - 2026-02-17
 
 ### Added
