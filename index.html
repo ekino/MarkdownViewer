@@ -20,6 +20,8 @@
       --code-bg: #f4f4f5;
       --table-border: #e5e5e5;
       --table-stripe: #fafafa;
+      --search-hit: #fff3a3;
+      --search-hit-active: #ffd54a;
     }
 
     html[data-theme="dark"] {
@@ -35,6 +37,8 @@
       --code-bg: #27272a;
       --table-border: #3f3f46;
       --table-stripe: #1f1f23;
+      --search-hit: #52462a;
+      --search-hit-active: #a37d2a;
     }
 
     * {
@@ -49,8 +53,208 @@
       background: var(--bg);
       color: var(--text);
       display: flex;
+      flex-direction: column;
       height: 100vh;
       overflow: hidden;
+    }
+
+    #main {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    /* Custom title bar — uses macOS Overlay style so traffic lights stay native */
+    #titlebar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      height: 38px;
+      padding-left: 80px;
+      padding-right: 12px;
+      background: var(--sidebar-bg);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      user-select: none;
+    }
+
+    #titlebar-title {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 0;
+      font-size: 13px;
+      color: var(--text-muted);
+      overflow: hidden;
+    }
+
+    #titlebar-filename {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 100%;
+    }
+
+    #titlebar-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+
+    /* Search box */
+    #search-box {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 2px 4px 2px 8px;
+      transition: border-color 0.15s;
+    }
+
+    #search-box:focus-within {
+      border-color: var(--accent);
+    }
+
+    #search-box .search-icon {
+      width: 12px;
+      height: 12px;
+      color: var(--text-muted);
+      flex-shrink: 0;
+    }
+
+    #search-input {
+      background: none;
+      border: none;
+      outline: none;
+      font-size: 12px;
+      color: var(--text);
+      width: 180px;
+      padding: 4px 0;
+      font-family: inherit;
+    }
+
+    #search-input:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    #search-input::placeholder {
+      color: var(--text-muted);
+    }
+
+    #search-counter {
+      font-size: 11px;
+      color: var(--text-muted);
+      min-width: 0;
+      white-space: nowrap;
+      padding: 0 4px;
+    }
+
+    .search-btn {
+      background: none;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      color: var(--text-muted);
+      padding: 2px 4px;
+      font-size: 11px;
+      line-height: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .search-btn:hover:not(:disabled) {
+      background: var(--sidebar-hover);
+      color: var(--text);
+    }
+
+    .search-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    #search-options-menu {
+      position: absolute;
+      top: 42px;
+      right: 12px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+      display: none;
+      flex-direction: column;
+      gap: 6px;
+      z-index: 1000;
+      min-width: 180px;
+    }
+
+    #search-options-menu.visible {
+      display: flex;
+    }
+
+    .search-option {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--text);
+      cursor: pointer;
+      padding: 4px;
+      border-radius: 4px;
+      user-select: none;
+    }
+
+    .search-option:hover {
+      background: var(--sidebar-hover);
+    }
+
+    .search-option input {
+      cursor: pointer;
+    }
+
+    /* Search highlights — CSS Custom Highlight API */
+    ::highlight(mdv-search) {
+      background-color: var(--search-hit);
+    }
+
+    ::highlight(mdv-search-current) {
+      background-color: var(--search-hit-active);
+    }
+
+    /* Fallback wrapper highlights */
+    mark.mdv-search-hit {
+      background: var(--search-hit);
+      color: inherit;
+      padding: 0;
+      border-radius: 2px;
+    }
+
+    mark.mdv-search-hit--active {
+      background: var(--search-hit-active);
+    }
+
+    /* Narrow window collapses search to icon-only */
+    @media (max-width: 700px) {
+      #search-input,
+      #search-counter,
+      #search-prev,
+      #search-next {
+        display: none;
+      }
+
+      #search-box.expanded #search-input,
+      #search-box.expanded #search-counter,
+      #search-box.expanded #search-prev,
+      #search-box.expanded #search-next {
+        display: inline-flex;
+      }
     }
 
     /* Left sidebar — files */
@@ -1004,69 +1208,139 @@
     </style>
   </head>
   <body>
-    <div id="sidebar">
-      <div id="sidebar-header">
-        <div id="sidebar-top">
+    <div id="titlebar" data-tauri-drag-region>
+      <div id="titlebar-title" data-tauri-drag-region>
+        <span id="titlebar-filename" data-tauri-drag-region></span>
+      </div>
+      <div id="titlebar-actions">
+        <button id="pdf-btn" title="Export to PDF">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path
+              d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"
+            />
+            <polyline points="14 2 14 8 20 8" />
+            <line x1="12" y1="18" x2="12" y2="12" />
+            <polyline points="9 15 12 18 15 15" />
+          </svg>
+        </button>
+        <button id="print-btn" title="Print">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M6 9V2h12v7" />
+            <path
+              d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"
+            />
+            <rect x="6" y="14" width="12" height="8" />
+          </svg>
+        </button>
+        <button id="theme-toggle" title="Toggle dark mode"></button>
+        <div id="search-box">
+          <svg
+            class="search-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          <input
+            id="search-input"
+            type="search"
+            placeholder="Rechercher…"
+            autocomplete="off"
+            spellcheck="false"
+            disabled
+          >
+          <span id="search-counter"></span>
+          <button
+            class="search-btn"
+            id="search-prev"
+            title="Précédent (Shift+Cmd+G)"
+            disabled
+          >
+            ↑
+          </button>
+          <button
+            class="search-btn"
+            id="search-next"
+            title="Suivant (Cmd+G)"
+            disabled
+          >
+            ↓
+          </button>
+          <button
+            class="search-btn"
+            id="search-options-btn"
+            title="Options de recherche"
+          >
+            ⚙
+          </button>
+        </div>
+        <div id="search-options-menu">
+          <label class="search-option">
+            <input type="checkbox" id="search-opt-case">
+            <span>Sensible à la casse (Aa)</span>
+          </label>
+          <label class="search-option">
+            <input type="checkbox" id="search-opt-diacritics" checked>
+            <span>Ignorer les accents</span>
+          </label>
+          <label class="search-option">
+            <input type="checkbox" id="search-opt-wholeword">
+            <span>Mot entier</span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div id="main">
+      <div id="sidebar">
+        <div id="sidebar-header">
+          <div id="sidebar-top">
+            <h2>Markdown Viewer</h2>
+          </div>
+          <div id="breadcrumb"></div>
+        </div>
+        <div id="file-list"></div>
+      </div>
+
+      <div id="content" class="empty">
+        <div id="empty-state">
           <h2>Markdown Viewer</h2>
-          <button id="pdf-btn" title="Export to PDF">
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path
-                d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"
-              />
-              <polyline points="14 2 14 8 20 8" />
-              <line x1="12" y1="18" x2="12" y2="12" />
-              <polyline points="9 15 12 18 15 15" />
-            </svg>
-          </button>
-          <button id="print-btn" title="Print">
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path d="M6 9V2h12v7" />
-              <path
-                d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"
-              />
-              <rect x="6" y="14" width="12" height="8" />
-            </svg>
-          </button>
-          <button id="theme-toggle" title="Toggle dark mode"></button>
+          <p>Open a folder to browse your documentation.</p>
+          <div id="empty-state-buttons">
+            <button id="open-btn">Open folder</button>
+            <button id="examples-btn">View examples</button>
+          </div>
         </div>
-        <div id="breadcrumb"></div>
+        <div id="markdown" style="display:none"></div>
       </div>
-      <div id="file-list"></div>
-    </div>
 
-    <div id="content" class="empty">
-      <div id="empty-state">
-        <h2>Markdown Viewer</h2>
-        <p>Open a folder to browse your documentation.</p>
-        <div id="empty-state-buttons">
-          <button id="open-btn">Open folder</button>
-          <button id="examples-btn">View examples</button>
-        </div>
+      <div id="outline">
+        <div id="outline-title">On this page</div>
+        <nav id="outline-nav"></nav>
       </div>
-      <div id="markdown" style="display:none"></div>
-    </div>
-
-    <div id="outline">
-      <div id="outline-title">On this page</div>
-      <nav id="outline-nav"></nav>
     </div>
 
     <script type="module" src="/src/main.ts"></script>
