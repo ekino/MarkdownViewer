@@ -9,6 +9,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { load } from "@tauri-apps/plugin-store";
 import { addCopyButtons, addImageLightbox } from "./dom";
 import { parseMarkdown } from "./markdown";
+import { createSearchController, type SearchController } from "./search";
 import type { Entry } from "./utils";
 import {
   classifyLink,
@@ -247,6 +248,30 @@ const examplesBtn = document.getElementById(
 ) as HTMLButtonElement;
 const outlineEl = document.getElementById("outline") as HTMLDivElement;
 const outlineNav = document.getElementById("outline-nav") as HTMLElement;
+const titlebarFilename = document.getElementById(
+  "titlebar-filename"
+) as HTMLSpanElement;
+const searchInput = document.getElementById("search-input") as HTMLInputElement;
+const searchCounter = document.getElementById(
+  "search-counter"
+) as HTMLSpanElement;
+const searchPrev = document.getElementById("search-prev") as HTMLButtonElement;
+const searchNext = document.getElementById("search-next") as HTMLButtonElement;
+const searchOptionsBtn = document.getElementById(
+  "search-options-btn"
+) as HTMLButtonElement;
+const searchOptionsMenu = document.getElementById(
+  "search-options-menu"
+) as HTMLDivElement;
+const searchOptCase = document.getElementById(
+  "search-opt-case"
+) as HTMLInputElement;
+const searchOptDiacritics = document.getElementById(
+  "search-opt-diacritics"
+) as HTMLInputElement;
+const searchOptWholeWord = document.getElementById(
+  "search-opt-wholeword"
+) as HTMLInputElement;
 
 let rootPath: string | null = null;
 let rootName = "";
@@ -291,8 +316,103 @@ async function openFileFromPath(filePath: string): Promise<void> {
   await setRootPath(parentDir, fileName);
 }
 
+// --- Search ---
+
+let searchController: SearchController | null = null;
+
+function setSearchEnabled(enabled: boolean): void {
+  searchInput.disabled = !enabled;
+  searchPrev.disabled = !enabled;
+  searchNext.disabled = !enabled;
+  if (!enabled && searchController) {
+    searchController.clear();
+  }
+}
+
+function handleSearchInputKey(e: KeyboardEvent): void {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    if (e.shiftKey) {
+      searchController?.prev();
+    } else {
+      searchController?.next();
+    }
+    return;
+  }
+  if (e.key === "Escape") {
+    e.preventDefault();
+    if (searchInput.value) {
+      searchController?.clear();
+    } else {
+      searchInput.blur();
+    }
+  }
+}
+
+function handleGlobalSearchShortcut(e: KeyboardEvent): void {
+  const meta = e.metaKey || e.ctrlKey;
+  if (!meta) {
+    return;
+  }
+  const key = e.key.toLowerCase();
+  if (key === "f" && !searchInput.disabled) {
+    e.preventDefault();
+    searchInput.focus();
+    searchInput.select();
+    return;
+  }
+  if (key === "g" && !searchInput.disabled && searchInput.value) {
+    e.preventDefault();
+    if (e.shiftKey) {
+      searchController?.prev();
+    } else {
+      searchController?.next();
+    }
+  }
+}
+
+function applySearchOptions(): void {
+  searchController?.setOptions({
+    caseSensitive: searchOptCase.checked,
+    ignoreDiacritics: searchOptDiacritics.checked,
+    wholeWord: searchOptWholeWord.checked,
+  });
+}
+
+function initSearch(): void {
+  searchController = createSearchController(markdownEl, {
+    input: searchInput,
+    counter: searchCounter,
+  });
+
+  searchInput.addEventListener("keydown", handleSearchInputKey);
+  searchPrev.addEventListener("click", () => searchController?.prev());
+  searchNext.addEventListener("click", () => searchController?.next());
+
+  searchOptionsBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    searchOptionsMenu.classList.toggle("visible");
+  });
+
+  document.addEventListener("click", (e) => {
+    if (
+      !searchOptionsMenu.contains(e.target as Node) &&
+      e.target !== searchOptionsBtn
+    ) {
+      searchOptionsMenu.classList.remove("visible");
+    }
+  });
+
+  searchOptCase.addEventListener("change", applySearchOptions);
+  searchOptDiacritics.addEventListener("change", applySearchOptions);
+  searchOptWholeWord.addEventListener("change", applySearchOptions);
+
+  document.addEventListener("keydown", handleGlobalSearchShortcut);
+}
+
 async function init(): Promise<void> {
   await initTheme();
+  initSearch();
   const appWindow = getCurrentWindow();
 
   // Runtime opens (hot-start file association, "Open With", CLI events)
@@ -365,6 +485,8 @@ async function renderSidebar(): Promise<void> {
   if (!activeFile) {
     emptyState.style.display = "block";
     contentEl.classList.add("empty");
+    titlebarFilename.textContent = "";
+    setSearchEnabled(false);
   }
 
   if (currentPath.length > 0) {
@@ -497,6 +619,10 @@ async function loadFile(filePath: string): Promise<void> {
     interceptLinks(currentDir);
     highlightSidebar();
     buildOutline();
+
+    titlebarFilename.textContent = filePath.split("/").pop() ?? "";
+    setSearchEnabled(true);
+    searchController?.reset();
   } catch (e) {
     console.error("Failed to load file:", filePath, e);
   }
