@@ -16,6 +16,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Changed
 
 - PDF, Print and Theme buttons moved from the sidebar header to the new title bar
+- Title bar reserves the traffic-lights area via `env(titlebar-area-x)` instead of a hardcoded 80px offset
+- Use a buffered pending-open slot for cold-start file association (no more 500ms timing hack); on hot-start, emit directly without re-buffering
+
+### Fixed
+
+- Search popover closes with Escape and exposes `aria-haspopup` / `aria-expanded` for assistive tech
+- Search navigation (next/prev) updates only the current-match highlight instead of rebuilding all highlights
 
 ## [0.8.1](https://github.com/ekino/MarkdownViewer/releases/tag/v0.8.1) - 2026-03-31
 

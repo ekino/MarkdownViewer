@@ -389,9 +389,14 @@ function initSearch(): void {
   searchPrev.addEventListener("click", () => searchController?.prev());
   searchNext.addEventListener("click", () => searchController?.next());
 
+  function setOptionsMenuOpen(open: boolean): void {
+    searchOptionsMenu.classList.toggle("visible", open);
+    searchOptionsBtn.setAttribute("aria-expanded", String(open));
+  }
+
   searchOptionsBtn.addEventListener("click", (e) => {
     e.stopPropagation();
-    searchOptionsMenu.classList.toggle("visible");
+    setOptionsMenuOpen(!searchOptionsMenu.classList.contains("visible"));
   });
 
   document.addEventListener("click", (e) => {
@@ -399,7 +404,14 @@ function initSearch(): void {
       !searchOptionsMenu.contains(e.target as Node) &&
       e.target !== searchOptionsBtn
     ) {
-      searchOptionsMenu.classList.remove("visible");
+      setOptionsMenuOpen(false);
+    }
+  });
+
+  searchOptionsMenu.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      setOptionsMenuOpen(false);
+      searchOptionsBtn.focus();
     }
   });
 

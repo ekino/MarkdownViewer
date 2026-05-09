@@ -65,13 +65,15 @@
       overflow: hidden;
     }
 
-    /* Custom title bar — uses macOS Overlay style so traffic lights stay native */
+    /* Custom title bar — uses macOS Overlay style so traffic lights stay native.
+           env(titlebar-area-x) reflects where the OS allows custom content; falls
+           back to 80px (typical traffic-lights footprint) when unsupported. */
     #titlebar {
       display: flex;
       align-items: center;
       gap: 8px;
       height: 38px;
-      padding-left: 80px;
+      padding-left: env(titlebar-area-x, 80px);
       padding-right: 12px;
       background: var(--sidebar-bg);
       border-bottom: 1px solid var(--border);
@@ -1293,6 +1295,8 @@
             class="search-btn"
             id="search-options-btn"
             title="Options de recherche"
+            aria-haspopup="menu"
+            aria-expanded="false"
           >
             ⚙
           </button>

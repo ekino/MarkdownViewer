@@ -152,18 +152,19 @@ pub fn run(path_arg: Option<String>) {
                 if let Ok(path) = url.to_file_path() {
                     if path.is_file() {
                         let path_str = path.to_string_lossy().to_string();
-                        // Buffer for cold-start (frontend may not be listening yet)
-                        // and emit for hot-start (frontend is up).
-                        if let Ok(mut slot) = pending_slot().lock() {
-                            *slot = Some(PendingOpen::File { path: path_str.clone() });
-                        }
-                        let _ = app_handle.emit("open-file", path_str);
-
                         let windows = app_handle.webview_windows();
                         if let Some(win) = windows.values().next() {
+                            // Hot-start: a window already exists, the JS listener
+                            // is registered. Emit directly; the frontend's cold-start
+                            // pull-from-buffer has already drained any prior value.
+                            let _ = app_handle.emit("open-file", path_str);
                             let _ = win.unminimize();
                             let _ = win.show();
                             let _ = win.set_focus();
+                        } else if let Ok(mut slot) = pending_slot().lock() {
+                            // Cold-start: Apple Events fired before setup completed.
+                            // Buffer so the frontend can pull it on init.
+                            *slot = Some(PendingOpen::File { path: path_str });
                         }
                     }
                 }
