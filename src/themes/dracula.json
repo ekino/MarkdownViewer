@@ -1,0 +1,22 @@
+{
+  "id": "dracula",
+  "name": "Dracula",
+  "isDark": true,
+  "pair": "github",
+  "vars": {
+    "--bg": "#282a36",
+    "--sidebar-bg": "#21222c",
+    "--sidebar-hover": "#343746",
+    "--sidebar-active": "#44475a",
+    "--border": "#44475a",
+    "--text": "#f8f8f2",
+    "--text-muted": "#6272a4",
+    "--accent": "#bd93f9",
+    "--accent-light": "#3a2f5c",
+    "--code-bg": "#1e1f29",
+    "--table-border": "#44475a",
+    "--table-stripe": "#2c2e3b",
+    "--search-hit": "#5a4a1a",
+    "--search-hit-active": "#f1fa8c"
+  }
+}

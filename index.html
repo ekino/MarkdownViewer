@@ -321,6 +321,603 @@
       color: var(--text);
     }
 
+    /* Preferences modal — macOS-style sheet */
+    .prefs-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 2000;
+      background: rgba(0, 0, 0, 0.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      opacity: 0;
+      transition: opacity 0.18s;
+    }
+
+    .prefs-backdrop.visible {
+      opacity: 1;
+    }
+
+    .prefs-panel {
+      width: 640px;
+      max-width: calc(100vw - 40px);
+      max-height: calc(100vh - 40px);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      transform: translateY(-12px);
+      transition: transform 0.18s;
+    }
+
+    .prefs-tabs {
+      display: flex;
+      gap: 4px;
+      padding: 10px 18px 0;
+      border-bottom: 1px solid var(--border);
+      background: var(--sidebar-bg);
+    }
+
+    .prefs-tab {
+      background: none;
+      border: none;
+      padding: 8px 14px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-family: inherit;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+      transition: color 0.15s, border-color 0.15s;
+    }
+
+    .prefs-tab:hover {
+      color: var(--text);
+    }
+
+    .prefs-tab.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+
+    .prefs-tab-panel {
+      display: none;
+    }
+
+    .prefs-tab-panel.active {
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    .prefs-theme-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      transition: opacity 0.15s;
+    }
+
+    .prefs-theme-grid.disabled {
+      opacity: 0.45;
+      pointer-events: none;
+    }
+
+    .prefs-theme-tile {
+      cursor: pointer;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      transition: border-color 0.15s, transform 0.1s;
+      text-align: left;
+      font-family: inherit;
+    }
+
+    .prefs-theme-tile:hover {
+      border-color: var(--accent);
+    }
+
+    .prefs-theme-tile.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-light);
+    }
+
+    .prefs-theme-preview {
+      height: 56px;
+      border-radius: 5px;
+      position: relative;
+      overflow: hidden;
+      border: 1px solid rgba(0, 0, 0, 0.06);
+    }
+
+    .prefs-theme-preview-text {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      font-size: 10px;
+      font-weight: 600;
+    }
+
+    .prefs-theme-preview-accent {
+      position: absolute;
+      bottom: 8px;
+      left: 8px;
+      width: 30%;
+      height: 5px;
+      border-radius: 3px;
+    }
+
+    .prefs-theme-preview-code {
+      position: absolute;
+      bottom: 8px;
+      right: 8px;
+      width: 38%;
+      height: 16px;
+      border-radius: 3px;
+      font-size: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .prefs-theme-name {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text);
+      padding: 0 2px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .prefs-theme-check {
+      color: var(--accent);
+      font-size: 11px;
+      display: none;
+    }
+
+    .prefs-theme-tile.active .prefs-theme-check {
+      display: inline;
+    }
+
+    .prefs-theme-tile {
+      position: relative;
+    }
+
+    .prefs-theme-actions {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      display: flex;
+      gap: 4px;
+      opacity: 0;
+      transition: opacity 0.15s;
+      pointer-events: none;
+    }
+
+    .prefs-theme-tile:hover .prefs-theme-actions {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .prefs-theme-action {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: rgba(0, 0, 0, 0.55);
+      color: white;
+      font-size: 11px;
+      line-height: 20px;
+      text-align: center;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .prefs-theme-action:hover {
+      background: var(--accent);
+    }
+
+    .prefs-theme-action.delete:hover {
+      background: #dc2626;
+    }
+
+    /* Theme editor (full-screen inside the modal) */
+    .prefs-editor {
+      display: none;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .prefs-tab-panel.active.prefs-editor-mode .prefs-editor-hide {
+      display: none;
+    }
+
+    .prefs-tab-panel.active.prefs-editor-mode .prefs-editor {
+      display: flex;
+    }
+
+    .prefs-editor-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .prefs-editor-back {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 3px 10px;
+      font-size: 12px;
+      cursor: pointer;
+      color: var(--text-muted);
+      font-family: inherit;
+    }
+
+    .prefs-editor-back:hover {
+      background: var(--sidebar-hover);
+      color: var(--text);
+    }
+
+    .prefs-editor-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .prefs-editor-meta {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .prefs-editor-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .prefs-editor-field label {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .prefs-editor-field input[type="text"],
+    .prefs-editor-field select {
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-size: 12px;
+      font-family: inherit;
+    }
+
+    .prefs-editor-field input[readonly] {
+      background: var(--code-bg);
+      color: var(--text-muted);
+      cursor: not-allowed;
+    }
+
+    .prefs-editor-vars {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px 14px;
+    }
+
+    .prefs-editor-var {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .prefs-editor-var-label {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .prefs-editor-var-name {
+      font-size: 12px;
+      color: var(--text);
+    }
+
+    .prefs-editor-var-key {
+      font-size: 10px;
+      color: var(--text-muted);
+      font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+    }
+
+    .prefs-editor-var input[type="color"] {
+      width: 32px;
+      height: 26px;
+      padding: 0;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      background: none;
+      cursor: pointer;
+    }
+
+    .prefs-editor-var input[type="text"] {
+      width: 90px;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 3px 6px;
+      font-size: 11px;
+      font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+    }
+
+    .prefs-editor-var input[type="text"].invalid {
+      border-color: #dc2626;
+    }
+
+    .prefs-editor-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding-top: 6px;
+      border-top: 1px dashed var(--border);
+    }
+
+    .prefs-editor-cancel,
+    .prefs-editor-save {
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      font-family: inherit;
+    }
+
+    .prefs-editor-cancel {
+      background: var(--code-bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .prefs-editor-cancel:hover {
+      background: var(--sidebar-hover);
+    }
+
+    .prefs-editor-save {
+      background: var(--accent);
+      color: white;
+      border: none;
+    }
+
+    .prefs-editor-save:hover {
+      opacity: 0.9;
+    }
+
+    .prefs-editor-save:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .prefs-editor-save.destructive {
+      background: #dc2626;
+    }
+
+    .prefs-checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .prefs-checkbox-row input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      cursor: pointer;
+    }
+
+    .prefs-backdrop.visible .prefs-panel {
+      transform: translateY(0);
+    }
+
+    .prefs-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+      background: var(--sidebar-bg);
+    }
+
+    .prefs-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .prefs-close {
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: var(--text-muted);
+      font-size: 18px;
+      line-height: 1;
+      padding: 4px 8px;
+      border-radius: 6px;
+    }
+
+    .prefs-close:hover {
+      background: var(--sidebar-hover);
+      color: var(--text);
+    }
+
+    .prefs-body {
+      padding: 18px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      overflow-y: auto;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .prefs-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .prefs-label {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .prefs-label-title {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text);
+    }
+
+    .prefs-label-hint {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .prefs-segment {
+      display: inline-flex;
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 2px;
+      gap: 2px;
+    }
+
+    .prefs-segment button {
+      background: none;
+      border: none;
+      padding: 4px 10px;
+      font-size: 12px;
+      color: var(--text-muted);
+      border-radius: 5px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+
+    .prefs-segment button.active {
+      background: var(--bg);
+      color: var(--text);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+    }
+
+    .prefs-segment button:hover:not(.active) {
+      color: var(--text);
+    }
+
+    .prefs-select {
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-size: 12px;
+      font-family: inherit;
+      cursor: pointer;
+    }
+
+    .prefs-footer {
+      padding: 12px 18px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: flex-end;
+      background: var(--sidebar-bg);
+    }
+
+    .prefs-done {
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 6px 16px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      font-family: inherit;
+    }
+
+    .prefs-done:hover {
+      opacity: 0.9;
+    }
+
+    .prefs-disclosure {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding-top: 6px;
+      border-top: 1px dashed var(--border);
+    }
+
+    .prefs-disclosure-btn {
+      background: none;
+      border: none;
+      color: var(--accent);
+      cursor: pointer;
+      font-size: 12px;
+      font-family: inherit;
+      padding: 4px 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .prefs-disclosure-btn:hover {
+      text-decoration: underline;
+    }
+
+    .prefs-reset {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      padding: 3px 10px;
+      border-radius: 5px;
+      font-size: 11px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+
+    .prefs-reset:hover {
+      background: var(--sidebar-hover);
+      color: var(--text);
+    }
+
+    .prefs-advanced {
+      display: none;
+      flex-direction: column;
+      gap: 14px;
+      padding-top: 4px;
+    }
+
+    .prefs-advanced.visible {
+      display: flex;
+    }
+
+    .prefs-number {
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-size: 12px;
+      font-family: inherit;
+      width: 70px;
+    }
+
     #breadcrumb {
       font-size: 12px;
       color: var(--text-muted);
@@ -496,7 +1093,38 @@
       max-width: 820px;
       margin: 0 auto;
       line-height: 1.7;
-      font-size: 15px;
+      font-size: var(--md-body-size, 15px);
+      font-family: var(
+        --md-body-font,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        Roboto,
+        sans-serif
+      );
+      font-weight: var(--md-body-weight, 400);
+    }
+
+    html[data-fontsize="small"] #markdown {
+      font-size: var(--md-body-size, 13px);
+    }
+    html[data-fontsize="large"] #markdown {
+      font-size: var(--md-body-size, 17px);
+    }
+
+    #markdown code,
+    #markdown pre code {
+      font-family: var(
+        --md-code-font,
+        "SF Mono",
+        "Fira Code",
+        "Consolas",
+        monospace
+      );
+    }
+
+    html[data-outline="hidden"] #outline {
+      display: none !important;
     }
 
     #markdown h1 {
@@ -559,7 +1187,6 @@
       padding: 2px 6px;
       border-radius: 4px;
       font-size: 0.88em;
-      font-family: "SF Mono", "Fira Code", "Consolas", monospace;
     }
 
     #markdown pre {
@@ -1215,7 +1842,7 @@
         <span id="titlebar-filename" data-tauri-drag-region></span>
       </div>
       <div id="titlebar-actions">
-        <button id="pdf-btn" title="Export to PDF">
+        <button id="pdf-btn" data-i18n-title="titlebar.pdf">
           <svg
             width="14"
             height="14"
@@ -1234,7 +1861,7 @@
             <polyline points="9 15 12 18 15 15" />
           </svg>
         </button>
-        <button id="print-btn" title="Print">
+        <button id="print-btn" data-i18n-title="titlebar.print">
           <svg
             width="14"
             height="14"
@@ -1252,7 +1879,7 @@
             <rect x="6" y="14" width="12" height="8" />
           </svg>
         </button>
-        <button id="theme-toggle" title="Toggle dark mode"></button>
+        <button id="theme-toggle" data-i18n-title="titlebar.theme"></button>
         <div id="search-box">
           <svg
             class="search-icon"
@@ -1269,7 +1896,7 @@
           <input
             id="search-input"
             type="search"
-            placeholder="Rechercher…"
+            data-i18n-placeholder="search.placeholder"
             autocomplete="off"
             spellcheck="false"
             disabled
@@ -1278,7 +1905,7 @@
           <button
             class="search-btn"
             id="search-prev"
-            title="Précédent (Shift+Cmd+G)"
+            data-i18n-title="search.prev"
             disabled
           >
             ↑
@@ -1286,7 +1913,7 @@
           <button
             class="search-btn"
             id="search-next"
-            title="Suivant (Cmd+G)"
+            data-i18n-title="search.next"
             disabled
           >
             ↓
@@ -1294,7 +1921,7 @@
           <button
             class="search-btn"
             id="search-options-btn"
-            title="Options de recherche"
+            data-i18n-title="search.options"
             aria-haspopup="menu"
             aria-expanded="false"
           >
@@ -1304,15 +1931,15 @@
         <div id="search-options-menu">
           <label class="search-option">
             <input type="checkbox" id="search-opt-case">
-            <span>Sensible à la casse (Aa)</span>
+            <span data-i18n="search.opt.case">Sensible à la casse (Aa)</span>
           </label>
           <label class="search-option">
             <input type="checkbox" id="search-opt-diacritics" checked>
-            <span>Ignorer les accents</span>
+            <span data-i18n="search.opt.diacritics">Ignorer les accents</span>
           </label>
           <label class="search-option">
             <input type="checkbox" id="search-opt-wholeword">
-            <span>Mot entier</span>
+            <span data-i18n="search.opt.wholeword">Mot entier</span>
           </label>
         </div>
       </div>
@@ -1322,7 +1949,7 @@
       <div id="sidebar">
         <div id="sidebar-header">
           <div id="sidebar-top">
-            <h2>Markdown Viewer</h2>
+            <h2 data-i18n="app.name">Markdown Viewer</h2>
           </div>
           <div id="breadcrumb"></div>
         </div>
@@ -1331,19 +1958,413 @@
 
       <div id="content" class="empty">
         <div id="empty-state">
-          <h2>Markdown Viewer</h2>
-          <p>Open a folder to browse your documentation.</p>
+          <h2 data-i18n="app.name">Markdown Viewer</h2>
+          <p data-i18n="empty.subtitle">
+            Open a folder to browse your documentation.
+          </p>
           <div id="empty-state-buttons">
-            <button id="open-btn">Open folder</button>
-            <button id="examples-btn">View examples</button>
+            <button id="open-btn" data-i18n="empty.open">Open folder</button>
+            <button id="examples-btn" data-i18n="empty.examples">
+              View examples
+            </button>
           </div>
         </div>
         <div id="markdown" style="display:none"></div>
       </div>
 
       <div id="outline">
-        <div id="outline-title">On this page</div>
+        <div id="outline-title" data-i18n="outline.title">On this page</div>
         <nav id="outline-nav"></nav>
+      </div>
+    </div>
+
+    <div
+      id="confirm-backdrop"
+      class="prefs-backdrop"
+      style="display:none;z-index:2100"
+    >
+      <div
+        class="prefs-panel"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="confirm-title"
+        aria-describedby="confirm-message"
+        style="width:420px"
+      >
+        <div class="prefs-header">
+          <span class="prefs-title" id="confirm-title"></span>
+        </div>
+        <div class="prefs-body">
+          <p id="confirm-message" style="font-size:13px;color:var(--text)"></p>
+        </div>
+        <div class="prefs-footer" style="gap:8px">
+          <button class="prefs-editor-cancel" id="confirm-cancel"></button>
+          <button class="prefs-editor-save" id="confirm-ok"></button>
+        </div>
+      </div>
+    </div>
+
+    <div id="prefs-backdrop" class="prefs-backdrop" style="display:none">
+      <div
+        class="prefs-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="prefs-title"
+      >
+        <div class="prefs-header">
+          <span class="prefs-title" id="prefs-title" data-i18n="prefs.title">
+            Preferences
+          </span>
+          <button
+            class="prefs-close"
+            id="prefs-close"
+            data-i18n-title="prefs.close"
+          >
+            ×
+          </button>
+        </div>
+        <div class="prefs-tabs" role="tablist">
+          <button
+            type="button"
+            class="prefs-tab active"
+            data-tab="general"
+            role="tab"
+            aria-selected="true"
+            tabindex="0"
+            data-i18n="prefs.tab.general"
+          >
+            Général
+          </button>
+          <button
+            type="button"
+            class="prefs-tab"
+            data-tab="fonts"
+            role="tab"
+            aria-selected="false"
+            tabindex="-1"
+            data-i18n="prefs.tab.fonts"
+          >
+            Polices
+          </button>
+          <button
+            type="button"
+            class="prefs-tab"
+            data-tab="appearance"
+            role="tab"
+            aria-selected="false"
+            tabindex="-1"
+            data-i18n="prefs.tab.appearance"
+          >
+            Apparence
+          </button>
+        </div>
+        <div class="prefs-body">
+          <div
+            class="prefs-tab-panel"
+            id="prefs-panel-appearance"
+            role="tabpanel"
+          >
+            <div class="prefs-editor-hide" style="display: contents">
+              <label class="prefs-checkbox-row">
+                <input type="checkbox" id="prefs-follow-system">
+                <span
+                  class="prefs-label-title"
+                  data-i18n="prefs.appearance.follow"
+                >
+                  Suivre le système
+                </span>
+              </label>
+              <div
+                class="prefs-label-hint"
+                id="prefs-follow-system-hint"
+                data-i18n="prefs.appearance.follow.hint"
+              >
+                Bascule automatiquement entre la variante claire et sombre du
+                thème selon l'apparence macOS.
+              </div>
+              <div class="prefs-theme-grid" id="prefs-theme-grid"></div>
+              <div class="prefs-disclosure">
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                  <button
+                    type="button"
+                    class="prefs-disclosure-btn"
+                    id="prefs-new-theme"
+                    data-i18n="prefs.appearance.new"
+                  >
+                    Nouveau thème…
+                  </button>
+                  <button
+                    type="button"
+                    class="prefs-disclosure-btn"
+                    id="prefs-import-theme"
+                    data-i18n="prefs.appearance.import"
+                  >
+                    Importer un thème…
+                  </button>
+                  <button
+                    type="button"
+                    class="prefs-disclosure-btn"
+                    id="prefs-reveal-themes"
+                    data-i18n="prefs.appearance.reveal"
+                  >
+                    Révéler dans le Finder
+                  </button>
+                </div>
+                <span
+                  class="prefs-label-hint"
+                  id="prefs-import-error"
+                  style="color:#dc2626;display:none"
+                ></span>
+              </div>
+            </div>
+
+            <div class="prefs-editor" id="prefs-editor">
+              <div class="prefs-editor-header">
+                <button
+                  type="button"
+                  class="prefs-editor-back"
+                  id="prefs-editor-back"
+                  data-i18n="editor.back"
+                >
+                  ← Retour
+                </button>
+                <span
+                  class="prefs-editor-title"
+                  id="prefs-editor-title"
+                  data-i18n="editor.title"
+                >
+                  Éditeur de thème
+                </span>
+              </div>
+              <div class="prefs-editor-meta">
+                <div class="prefs-editor-field">
+                  <label data-i18n="editor.field.name">Nom</label>
+                  <input type="text" id="prefs-editor-name">
+                </div>
+                <div class="prefs-editor-field">
+                  <label data-i18n="editor.field.id">Identifiant</label>
+                  <input
+                    type="text"
+                    id="prefs-editor-id"
+                    readonly
+                    tabindex="-1"
+                  >
+                </div>
+                <div class="prefs-editor-field">
+                  <label data-i18n="editor.field.mode">Mode</label>
+                  <select id="prefs-editor-isdark">
+                    <option value="false" data-i18n="editor.mode.light">Clair</option>
+                    <option value="true" data-i18n="editor.mode.dark">Sombre</option>
+                  </select>
+                </div>
+                <div class="prefs-editor-field">
+                  <label data-i18n="editor.field.pair">Thème jumeau</label>
+                  <select id="prefs-editor-pair"></select>
+                </div>
+              </div>
+              <div class="prefs-editor-vars" id="prefs-editor-vars"></div>
+              <div class="prefs-editor-actions">
+                <button
+                  type="button"
+                  class="prefs-editor-cancel"
+                  id="prefs-editor-cancel"
+                  data-i18n="editor.cancel"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="button"
+                  class="prefs-editor-save"
+                  id="prefs-editor-save"
+                  data-i18n="editor.save"
+                >
+                  Enregistrer
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div
+            class="prefs-tab-panel"
+            id="prefs-panel-fonts"
+            role="tabpanel"
+          >
+            <div class="prefs-row">
+              <div class="prefs-label">
+                <span class="prefs-label-title" data-i18n="prefs.fonts.size.title">
+                  Taille
+                </span>
+                <span class="prefs-label-hint" data-i18n="prefs.fonts.size.hint">
+                  Préréglage rapide pour le texte du document
+                </span>
+              </div>
+              <select class="prefs-select" id="prefs-fontsize">
+                <option value="small" data-i18n="prefs.fonts.size.small">
+                  Petit
+                </option>
+                <option value="medium" data-i18n="prefs.fonts.size.medium">
+                  Moyen
+                </option>
+                <option value="large" data-i18n="prefs.fonts.size.large">
+                  Grand
+                </option>
+              </select>
+            </div>
+            <div class="prefs-disclosure">
+              <button
+                type="button"
+                class="prefs-disclosure-btn"
+                id="prefs-advanced-toggle"
+                aria-expanded="false"
+                aria-controls="prefs-advanced"
+              >
+                <span id="prefs-advanced-caret">▸</span>
+                <span data-i18n="prefs.fonts.advanced">Typographie avancée</span>
+              </button>
+              <button
+                type="button"
+                class="prefs-reset"
+                id="prefs-advanced-reset"
+                data-i18n="prefs.fonts.advanced.reset"
+                data-i18n-title="prefs.fonts.advanced.reset.title"
+              >
+                Réinitialiser
+              </button>
+            </div>
+            <div class="prefs-advanced" id="prefs-advanced">
+              <div class="prefs-row">
+                <div class="prefs-label">
+                  <span class="prefs-label-title" data-i18n="prefs.fonts.body.title">
+                    Police du corps
+                  </span>
+                  <span class="prefs-label-hint" data-i18n="prefs.fonts.body.hint">
+                    Famille pour la prose
+                  </span>
+                </div>
+                <select class="prefs-select" id="prefs-body-font">
+                  <option value="" data-i18n="prefs.fonts.system.default">
+                    Par défaut système
+                  </option>
+                </select>
+              </div>
+              <div class="prefs-row">
+                <div class="prefs-label">
+                  <span class="prefs-label-title" data-i18n="prefs.fonts.code.title">
+                    Police du code
+                  </span>
+                  <span
+                    class="prefs-label-hint"
+                    data-i18n="prefs.fonts.code.hint"
+                  >
+                    Utilisée dans le code et les blocs préformatés
+                  </span>
+                </div>
+                <select class="prefs-select" id="prefs-code-font">
+                  <option value="" data-i18n="prefs.fonts.system.default">
+                    Par défaut système
+                  </option>
+                </select>
+              </div>
+              <div class="prefs-row">
+                <div class="prefs-label">
+                  <span class="prefs-label-title" data-i18n="prefs.fonts.weight.title">
+                    Graisse
+                  </span>
+                  <span class="prefs-label-hint" data-i18n="prefs.fonts.weight.hint">
+                    Épaisseur du texte
+                  </span>
+                </div>
+                <select class="prefs-select" id="prefs-font-weight">
+                  <option value="" data-i18n="prefs.fonts.weight.default">
+                    Défaut
+                  </option>
+                  <option value="300" data-i18n="prefs.fonts.weight.300">
+                    Light (300)
+                  </option>
+                  <option value="400" data-i18n="prefs.fonts.weight.400">
+                    Regular (400)
+                  </option>
+                  <option value="500" data-i18n="prefs.fonts.weight.500">
+                    Medium (500)
+                  </option>
+                  <option value="600" data-i18n="prefs.fonts.weight.600">
+                    Semibold (600)
+                  </option>
+                  <option value="700" data-i18n="prefs.fonts.weight.700">
+                    Bold (700)
+                  </option>
+                </select>
+              </div>
+              <div class="prefs-row">
+                <div class="prefs-label">
+                  <span class="prefs-label-title" data-i18n="prefs.fonts.size.exact.title">
+                    Taille exacte
+                  </span>
+                  <span class="prefs-label-hint" data-i18n="prefs.fonts.size.exact.hint">
+                    Surcharge le préréglage (10–32 px)
+                  </span>
+                </div>
+                <input
+                  type="number"
+                  class="prefs-number"
+                  id="prefs-custom-size"
+                  min="10"
+                  max="32"
+                  step="1"
+                  data-i18n-placeholder="prefs.fonts.placeholder.auto"
+                  placeholder="auto"
+                >
+              </div>
+            </div>
+          </div>
+
+          <div
+            class="prefs-tab-panel active"
+            id="prefs-panel-general"
+            role="tabpanel"
+          >
+            <div class="prefs-row">
+              <div class="prefs-label">
+                <span class="prefs-label-title" data-i18n="prefs.general.language.title">
+                  Langue
+                </span>
+                <span class="prefs-label-hint" data-i18n="prefs.general.language.hint">
+                  Langue de l'interface
+                </span>
+              </div>
+              <select class="prefs-select" id="prefs-language">
+                <option value="fr">Français</option>
+                <option value="en">English</option>
+              </select>
+            </div>
+            <div class="prefs-row">
+              <div class="prefs-label">
+                <span class="prefs-label-title" data-i18n="prefs.general.outline.title">
+                  Panneau de plan
+                </span>
+                <span class="prefs-label-hint" data-i18n="prefs.general.outline.hint">
+                  Table des matières à droite
+                </span>
+              </div>
+              <div class="prefs-segment" id="prefs-outline" role="radiogroup">
+                <button type="button" data-value="auto" data-i18n="prefs.outline.auto">
+                  Auto
+                </button>
+                <button type="button" data-value="always" data-i18n="prefs.outline.always">
+                  Toujours
+                </button>
+                <button type="button" data-value="hidden" data-i18n="prefs.outline.hidden">
+                  Caché
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="prefs-footer">
+          <button class="prefs-done" id="prefs-done" data-i18n="prefs.done">
+            Done
+          </button>
+        </div>
       </div>
     </div>
 

@@ -1,0 +1,22 @@
+{
+  "id": "nord",
+  "name": "Nord",
+  "isDark": true,
+  "pair": "github",
+  "vars": {
+    "--bg": "#2e3440",
+    "--sidebar-bg": "#272c36",
+    "--sidebar-hover": "#3b4252",
+    "--sidebar-active": "#434c5e",
+    "--border": "#3b4252",
+    "--text": "#eceff4",
+    "--text-muted": "#8fa1b3",
+    "--accent": "#88c0d0",
+    "--accent-light": "#3b4252",
+    "--code-bg": "#3b4252",
+    "--table-border": "#434c5e",
+    "--table-stripe": "#323845",
+    "--search-hit": "#4c566a",
+    "--search-hit-active": "#ebcb8b"
+  }
+}

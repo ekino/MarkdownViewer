@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { addCopyButtons, addImageLightbox } from "./dom";
+import { setLocale, t } from "./i18n";
 import { parseMarkdown } from "./markdown";
 
 describe("integration — markdown to DOM", () => {
@@ -73,11 +74,12 @@ describe("integration — addCopyButtons", () => {
       "<pre>No code here</pre>",
     ].join("");
 
+    setLocale("en");
     addCopyButtons(container);
 
     const buttons = container.querySelectorAll(".copy-btn");
     expect(buttons.length).toBe(2);
-    expect(buttons[0].textContent).toBe("Copy");
+    expect(buttons[0].textContent).toBe(t("code.copy"));
   });
 
   it("does not add duplicate buttons", () => {

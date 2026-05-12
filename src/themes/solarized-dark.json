@@ -1,0 +1,22 @@
+{
+  "id": "solarized-dark",
+  "name": "Solarized Dark",
+  "isDark": true,
+  "pair": "solarized-light",
+  "vars": {
+    "--bg": "#002b36",
+    "--sidebar-bg": "#073642",
+    "--sidebar-hover": "#0b4250",
+    "--sidebar-active": "#10505f",
+    "--border": "#0b4250",
+    "--text": "#93a1a1",
+    "--text-muted": "#657b83",
+    "--accent": "#268bd2",
+    "--accent-light": "#0b3a4a",
+    "--code-bg": "#073642",
+    "--table-border": "#0b4250",
+    "--table-stripe": "#053240",
+    "--search-hit": "#5a4a1a",
+    "--search-hit-active": "#b58900"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "id": "github",
+  "name": "GitHub",
+  "isDark": false,
+  "pair": "dracula",
+  "vars": {
+    "--bg": "#ffffff",
+    "--sidebar-bg": "#f6f8fa",
+    "--sidebar-hover": "#eaeef2",
+    "--sidebar-active": "#d0d7de",
+    "--border": "#d0d7de",
+    "--text": "#1f2328",
+    "--text-muted": "#656d76",
+    "--accent": "#0969da",
+    "--accent-light": "#ddf4ff",
+    "--code-bg": "#f6f8fa",
+    "--table-border": "#d0d7de",
+    "--table-stripe": "#f6f8fa",
+    "--search-hit": "#fff8c5",
+    "--search-hit-active": "#ffd33d"
+  }
+}
