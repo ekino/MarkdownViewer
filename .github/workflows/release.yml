@@ -12,6 +12,9 @@ jobs:
   build-macos:
     name: Build macOS (Sign & Notarize)
     runs-on: macos-latest
+    # Manual-approval gate: secrets (Apple cert + Tauri signing key) are
+    # only readable from this environment. See docs/maintainers/releasing.md.
+    environment: production-release
     steps:
       - uses: actions/checkout@v4
 
@@ -21,6 +24,9 @@ jobs:
           cache: npm
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          # Both targets required for the universal binary used by the auto-updater.
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -51,13 +57,20 @@ jobs:
 
       - run: npm ci
       - run: npm test
-      - run: npm run tauri build
+
+      - name: Build (universal)
+        env:
+          # Tauri picks these up automatically and emits .sig files alongside
+          # bundle artifacts. Must come from the production-release environment.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri build -- --target universal-apple-darwin
 
       - name: Re-sign with hardened runtime
         env:
           SIGNING_IDENTITY: "Developer ID Application: NICOLAS PATRICK PRUD'HOMME (44DTA694H9)"
         run: |
-          APP_PATH="src-tauri/target/release/bundle/macos/Markdown Viewer.app"
+          APP_PATH="src-tauri/target/universal-apple-darwin/release/bundle/macos/Markdown Viewer.app"
 
           # Re-sign all dylibs and frameworks inside the app
           find "$APP_PATH/Contents" \( -name "*.dylib" -o -name "*.so" \) -type f | while read lib; do
@@ -81,7 +94,7 @@ jobs:
           echo "Signature verification passed"
 
           # Recreate DMG with Applications symlink
-          rm -f src-tauri/target/release/bundle/dmg/*.dmg
+          rm -f src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
           STAGING_DIR=$(mktemp -d)
           cp -R "$APP_PATH" "$STAGING_DIR/"
           ln -s /Applications "$STAGING_DIR/Applications"
@@ -89,7 +102,7 @@ jobs:
             -volname "Markdown Viewer" \
             -srcfolder "$STAGING_DIR" \
             -ov -format UDZO \
-            "src-tauri/target/release/bundle/dmg/Markdown-Viewer.dmg"
+            "src-tauri/target/universal-apple-darwin/release/bundle/dmg/Markdown-Viewer.dmg"
           rm -rf "$STAGING_DIR"
 
       - name: Notarize DMG
@@ -100,23 +113,72 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          DMG_PATH="src-tauri/target/release/bundle/dmg/Markdown-Viewer.dmg"
+          DMG_PATH="src-tauri/target/universal-apple-darwin/release/bundle/dmg/Markdown-Viewer.dmg"
           xcrun notarytool submit "$DMG_PATH" \
             --apple-id "$APPLE_ID" \
             --team-id "$APPLE_TEAM_ID" \
             --password "$APPLE_PASSWORD" \
             --wait
           xcrun stapler staple "$DMG_PATH"
+
+          # Also staple the .app itself so the post-notarize tarball
+          # consumed by the auto-updater carries the staple. Without this,
+          # users would notarize-fail on Gatekeeper after auto-updating.
+          APP_PATH="src-tauri/target/universal-apple-darwin/release/bundle/macos/Markdown Viewer.app"
+          xcrun stapler staple "$APP_PATH"
           echo "NOTARIZED=true" >> "$GITHUB_ENV"
+
+      - name: Verify universal binary
+        # Fail loudly if the build emitted a non-universal binary — the
+        # manifest step assumes one artifact covers both arches.
+        run: |
+          set -euo pipefail
+          APP_BIN="src-tauri/target/universal-apple-darwin/release/bundle/macos/Markdown Viewer.app/Contents/MacOS/mdv"
+          ARCHS=$(lipo -archs "$APP_BIN")
+          echo "Built archs: $ARCHS"
+          case "$ARCHS" in
+            *x86_64*arm64*|*arm64*x86_64*) echo "OK: universal binary" ;;
+            *) echo "ERROR: binary is not universal (got: $ARCHS)"; exit 1 ;;
+          esac
+
+      - name: Package + sign updater tarball (post-notarize)
+        env:
+          # tauri signer sign reads these env vars natively — no need to
+          # pass them via process substitution (which would briefly expose
+          # the key through /proc/<pid>/cmdline).
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          APP_PATH="src-tauri/target/universal-apple-darwin/release/bundle/macos/Markdown Viewer.app"
+          OUT_DIR="src-tauri/target/universal-apple-darwin/release/bundle/macos"
+          TARBALL="$OUT_DIR/Markdown-Viewer.app.tar.gz"
+
+          # Tar from inside the parent so the archive contains "Markdown Viewer.app/..."
+          # at the top level rather than absolute paths.
+          tar -czf "$TARBALL" -C "$(dirname "$APP_PATH")" "$(basename "$APP_PATH")"
+
+          # Generate Ed25519 .sig next to the tarball. Key comes from env.
+          npx tauri signer sign "$TARBALL"
+
+          # Hard fail if .sig didn't land — the manifest step would silently
+          # skip the platform otherwise, breaking auto-updates without alerting.
+          test -f "${TARBALL}.sig" || { echo "ERROR: .sig file was not produced"; exit 1; }
+
+          ls -la "$OUT_DIR"
 
       - uses: actions/upload-artifact@v4
         with:
           name: macos-artifacts
-          path: src-tauri/target/release/bundle/dmg/*.dmg
+          path: |
+            src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+            src-tauri/target/universal-apple-darwin/release/bundle/macos/Markdown-Viewer.app.tar.gz
+            src-tauri/target/universal-apple-darwin/release/bundle/macos/Markdown-Viewer.app.tar.gz.sig
 
   build-windows:
     name: Build Windows
     runs-on: windows-latest
+    environment: production-release
     steps:
       - uses: actions/checkout@v4
 
@@ -133,7 +195,12 @@ jobs:
 
       - run: npm ci
       - run: npm test
-      - run: npx tauri build
+
+      - name: Build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npx tauri build
 
       - uses: actions/upload-artifact@v4
         with:
@@ -141,16 +208,69 @@ jobs:
           path: |
             src-tauri/target/release/bundle/msi/*.msi
             src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/nsis/*.nsis.zip
+            src-tauri/target/release/bundle/nsis/*.nsis.zip.sig
 
   release:
     name: Create GitHub Release
     needs: [build-macos, build-windows]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
+
+      - name: Generate latest.json
+        id: manifest
+        run: |
+          set -euo pipefail
+
+          # Tag like "v0.10.0" -> version "0.10.0".
+          VERSION="${GITHUB_REF_NAME#v}"
+          PUB_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          MAC_SIG=""
+          WIN_SIG=""
+          MAC_TAR=$(ls artifacts/Markdown-Viewer.app.tar.gz 2>/dev/null || true)
+          MAC_SIG_FILE=$(ls artifacts/Markdown-Viewer.app.tar.gz.sig 2>/dev/null || true)
+          WIN_ZIP=$(ls artifacts/*.nsis.zip 2>/dev/null | head -n1 || true)
+          WIN_SIG_FILE=$(ls artifacts/*.nsis.zip.sig 2>/dev/null | head -n1 || true)
+
+          if [ -n "$MAC_SIG_FILE" ]; then MAC_SIG=$(cat "$MAC_SIG_FILE"); fi
+          if [ -n "$WIN_SIG_FILE" ]; then WIN_SIG=$(cat "$WIN_SIG_FILE"); fi
+
+          BASE="https://github.com/ekino/MarkdownViewer/releases/download/${GITHUB_REF_NAME}"
+
+          # Build manifest. Only include platforms we actually shipped artifacts for —
+          # an empty signature means the build failed/was skipped, and the updater
+          # plugin rejects empty sigs anyway, so omit the platform entirely.
+          PLATFORMS="{}"
+          if [ -n "$MAC_TAR" ] && [ -n "$MAC_SIG" ]; then
+            PLATFORMS=$(jq -n \
+              --arg sig "$MAC_SIG" \
+              --arg url "${BASE}/Markdown-Viewer.app.tar.gz" \
+              '{ "darwin-x86_64": {signature: $sig, url: $url}, "darwin-aarch64": {signature: $sig, url: $url} }')
+          fi
+          if [ -n "$WIN_ZIP" ] && [ -n "$WIN_SIG" ]; then
+            WIN_URL="${BASE}/$(basename "$WIN_ZIP")"
+            PLATFORMS=$(echo "$PLATFORMS" | jq \
+              --arg sig "$WIN_SIG" \
+              --arg url "$WIN_URL" \
+              '. + {"windows-x86_64": {signature: $sig, url: $url}}')
+          fi
+
+          jq -n \
+            --arg version "$VERSION" \
+            --arg pub_date "$PUB_DATE" \
+            --argjson platforms "$PLATFORMS" \
+            '{ version: $version, notes: "See release notes on GitHub.", pub_date: $pub_date, platforms: $platforms }' \
+            > artifacts/latest.json
+
+          echo "Generated latest.json:"
+          cat artifacts/latest.json
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -161,3 +281,8 @@ jobs:
             artifacts/**/*.dmg
             artifacts/**/*.msi
             artifacts/**/*.exe
+            artifacts/Markdown-Viewer.app.tar.gz
+            artifacts/Markdown-Viewer.app.tar.gz.sig
+            artifacts/*.nsis.zip
+            artifacts/*.nsis.zip.sig
+            artifacts/latest.json

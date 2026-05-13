@@ -28,10 +28,22 @@ tauri-plugin-dialog = "2"
 tauri-plugin-store = "2"
 tokio = { version = "1", features = ["sync"] }
 tauri-plugin-opener = "2.5.3"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+# Used only for fetching GitHub release notes for the "What's New" screen.
+# Already in the dep tree via tauri-plugin-updater; declared explicitly so
+# the dependency is auditable from this file.
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 font-kit = "0.14"
+notify = "6"
+notify-debouncer-mini = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSData", "NSError", "NSString"] }
 objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKPDFConfiguration", "block2", "objc2-app-kit"] }
+objc2-app-kit = { version = "0.3", features = ["NSSharingService", "NSView", "NSResponder", "NSWindow", "NSGraphicsContext", "block2"] }
 block2 = "0.6"

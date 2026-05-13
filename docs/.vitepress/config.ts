@@ -16,7 +16,14 @@ export default defineConfig({
         items: [
           { text: "Getting Started", link: "/guide/getting-started" },
           { text: "Features", link: "/guide/features" },
+          { text: "Auto-updates", link: "/guide/auto-updates" },
           { text: "Security", link: "/guide/security" },
+        ],
+      },
+      {
+        text: "Maintainers",
+        items: [
+          { text: "Releasing & Signing", link: "/maintainers/releasing" },
         ],
       },
       {

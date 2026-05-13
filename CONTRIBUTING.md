@@ -51,6 +51,10 @@ Thanks for your interest in contributing to MarkdownViewer!
 4. Commit with a clear message describing the change
 5. Push and open a Pull Request
 
+## Releasing
+
+If you are a maintainer cutting a release, follow the runbook at [`docs/maintainers/releasing.md`](docs/maintainers/releasing.md). It covers the one-time signing-key setup, the release checklist, manual signature verification, key rotation, and incident response.
+
 ## Reporting Issues
 
 Please open an [issue](https://github.com/ekino/MarkdownViewer/issues) with:

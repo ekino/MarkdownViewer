@@ -1,3 +1,4 @@
+import DOMPurify from "dompurify";
 import mermaid from "mermaid";
 import "katex/dist/katex.min.css";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -21,6 +22,32 @@ import {
   type Locale,
 } from "./i18n";
 import { parseMarkdown } from "./markdown";
+import {
+  loadRecents as loadRecentsFromStore,
+  pushRecent,
+  saveRecents,
+  type RecentEntry,
+} from "./recents";
+import { loadSession, saveSession } from "./session";
+import { runExport, type ExportFormat } from "./export";
+import { SidebarTree, type ScanResult } from "./sidebar-tree";
+import { TabManager, type Tab } from "./tabs";
+import { showToast } from "./toast";
+import {
+  AUTO_CHECK_KEY,
+  autoCheckOnStartup,
+  manualCheck,
+  type BannerAction,
+  type UpdaterDeps,
+} from "./updater";
+import { autoShowAfterUpdate, showManually } from "./whats-new";
+import type { Update } from "@tauri-apps/plugin-updater";
+import {
+  renderRecentsList,
+  showContextMenu,
+  updateWelcomeVisibility,
+  type RecentDisplayEntry,
+} from "./welcome";
 import {
   APPEARANCE_KEY,
   BODY_FONT_KEY,
@@ -112,6 +139,18 @@ function activeThemeId(): ThemeId {
   );
 }
 
+// Pass every mermaid-produced SVG through DOMPurify before it lands in
+// the live DOM. Mermaid 10/11 with securityLevel:"strict" already drops
+// most XSS vectors, but historical CVEs (e.g. CVE-2021-23648) prove the
+// SVG output is not a trust boundary on its own. Allowing the standard
+// SVG profile keeps gradients, animations, and foreign-object text that
+// real diagrams need.
+function sanitizeMermaidSvg(svg: string): string {
+  return DOMPurify.sanitize(svg, {
+    USE_PROFILES: { svg: true, svgFilters: true },
+  }) as unknown as string;
+}
+
 function applyActiveTheme(): void {
   const id = activeThemeId();
   applyThemeToDOM(themeCatalog, document.documentElement, id);
@@ -120,7 +159,11 @@ function applyActiveTheme(): void {
   mermaid.initialize({
     startOnLoad: false,
     theme: dark ? "dark" : "default",
-    securityLevel: "loose",
+    // `strict` blocks user-supplied click handlers and HTML labels inside
+    // mermaid blocks. We additionally sanitize the rendered SVG below as
+    // defense-in-depth, since past mermaid releases have shipped XSS
+    // bugs even at this level.
+    securityLevel: "strict",
     fontFamily:
       '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
   });
@@ -217,6 +260,105 @@ pdfBtn.addEventListener("click", async () => {
   }
 });
 
+// Save / Export — wired by the native File menu.
+//
+// Tauri's save() doesn't show a format picker inside the OS dialog, so
+// instead of one ambiguous "Save As" we expose one menu item per format
+// (each with its own single-filter native dialog). ⌘S replays whichever
+// format the user last picked for the active file.
+const lastExportFormatByFile = new Map<string, ExportFormat>();
+
+const FORMAT_FILTER: Record<ExportFormat, { name: string; ext: string }> = {
+  pdf: { name: "PDF", ext: "pdf" },
+  "html-standalone": { name: "HTML (standalone)", ext: "html" },
+  "html-with-assets": { name: "HTML + assets", ext: "html" },
+  "md-copy": { name: "Markdown source", ext: "md" },
+};
+
+function activeAbsoluteFile(): string | null {
+  return absoluteActiveFile();
+}
+
+function activeDefaultStem(): string {
+  if (!activeFile) return "document";
+  const name = activeFile.split("/").pop() ?? "document.md";
+  return name.replace(/\.[^.]+$/, "");
+}
+
+async function exportAs(format: ExportFormat): Promise<void> {
+  const sourcePath = activeAbsoluteFile();
+  if (!sourcePath) return;
+  const filter = FORMAT_FILTER[format];
+  const outputPath = await save({
+    defaultPath: `${activeDefaultStem()}.${filter.ext}`,
+    filters: [{ name: filter.name, extensions: [filter.ext] }],
+  });
+  if (!outputPath) return;
+  await performExport(format, sourcePath, outputPath);
+}
+
+async function runSave(): Promise<void> {
+  const sourcePath = activeAbsoluteFile();
+  if (!sourcePath) return;
+  // First save on this file → fall back to PDF, the most common choice.
+  const format = lastExportFormatByFile.get(sourcePath) ?? "pdf";
+  await exportAs(format);
+}
+
+async function performExport(
+  format: ExportFormat,
+  sourcePath: string,
+  outputPath: string,
+): Promise<void> {
+  // The PDF pipeline needs the print-mode body class around the WKWebView
+  // capture, just like the existing PDF button flow.
+  const wantsPdf = format === "pdf";
+  if (wantsPdf) document.body.classList.add("print-mode");
+  try {
+    if (wantsPdf) await new Promise((r) => setTimeout(r, 150));
+    await runExport(
+      format,
+      {
+        sourcePath,
+        rootPath,
+        markdownEl,
+        defaultStem: activeDefaultStem(),
+      },
+      {
+        // We provide the outputPath directly via a stub save() that
+        // returns it unchanged — runExport's save() prompt was already
+        // handled by runSave/runSaveAs above.
+        save: async () => outputPath,
+        invoke: invoke as unknown as (
+          cmd: string,
+          args?: Record<string, unknown>,
+        ) => Promise<unknown>,
+      },
+    );
+    lastExportFormatByFile.set(sourcePath, format);
+  } catch (e) {
+    console.error("Export failed:", e);
+    showToast(`Export failed: ${e}`, "error");
+  } finally {
+    if (wantsPdf) document.body.classList.remove("print-mode");
+  }
+}
+
+// macOS Share — only invokable from the menu on macOS; on other OSes
+// the menu item isn't rendered, so this handler is a no-op fallback.
+async function runShare(): Promise<void> {
+  const sourcePath = activeAbsoluteFile();
+  if (!sourcePath) return;
+  // Anchor the share sheet to the top-right of the titlebar (rough but
+  // adequate — sanitize_rect on the Rust side clamps to the view).
+  const rect = { x: window.innerWidth - 80, y: 8, width: 32, height: 24 };
+  try {
+    await invoke("share_macos", { paths: [sourcePath], anchor: rect });
+  } catch (e) {
+    console.warn("share_macos failed:", e);
+  }
+}
+
 themeToggle.addEventListener("click", async () => {
   const activeId = activeThemeId();
   const newId = themeCatalog[activeId]?.pair ?? activeId;
@@ -261,7 +403,7 @@ async function renderMermaidDiagrams(): Promise<void> {
 
       const preview = document.createElement("div");
       preview.className = "mermaid-preview";
-      preview.innerHTML = svg;
+      preview.innerHTML = sanitizeMermaidSvg(svg);
 
       wrapper.appendChild(btn);
       wrapper.appendChild(preview);
@@ -358,7 +500,7 @@ function openMermaidFullscreen(svgContent: string, title: string): void {
 
   const body = document.createElement("div");
   body.className = "mermaid-overlay-body";
-  body.innerHTML = svgContent;
+  body.innerHTML = sanitizeMermaidSvg(svgContent);
 
   const svg = body.querySelector("svg");
   if (svg) {
@@ -393,8 +535,20 @@ const markdownEl = document.getElementById("markdown") as HTMLDivElement;
 const emptyState = document.getElementById("empty-state") as HTMLDivElement;
 const contentEl = document.getElementById("content") as HTMLDivElement;
 const openBtn = document.getElementById("open-btn") as HTMLButtonElement;
+const openFileBtn = document.getElementById(
+  "open-file-btn"
+) as HTMLButtonElement;
 const examplesBtn = document.getElementById(
   "examples-btn"
+) as HTMLButtonElement;
+const welcomeRecentsWrap = document.getElementById(
+  "welcome-recents"
+) as HTMLDivElement;
+const welcomeRecentsList = document.getElementById(
+  "welcome-recents-list"
+) as HTMLUListElement;
+const welcomeRecentsClear = document.getElementById(
+  "welcome-recents-clear"
 ) as HTMLButtonElement;
 const outlineEl = document.getElementById("outline") as HTMLDivElement;
 const outlineNav = document.getElementById("outline-nav") as HTMLElement;
@@ -429,26 +583,165 @@ let currentPath: string[] = [];
 let activeFile: string | null = null;
 let scrollObserver: IntersectionObserver | null = null;
 
+const sidebarTree = new SidebarTree(fileList, {
+  onOpenFile: (absPath, opts) => {
+    if (opts.newTab) {
+      void tabManager.openInNewTab(absPath);
+    } else {
+      void tabManager.openInActiveTab(absPath);
+    }
+  },
+  onReveal: (absPath) => revealInFinder(absPath),
+  onRevealDir: (absPath) => revealInFinder(absPath),
+});
+
+const tabBar = document.getElementById("tab-bar") as HTMLDivElement;
+const tabManager = new TabManager(tabBar, {
+  onActivate: async (filePath, scrollY) => {
+    // The tab system stores absolute paths. Route through the same
+    // helper used by the sidebar so root-switching is consistent.
+    await openFileFromAbsolutePath(filePath);
+    // Restore scroll once the DOM is in place. requestAnimationFrame is
+    // a single tick after parseMarkdown + mermaid → adequate for most
+    // pages without a heavy heuristic.
+    requestAnimationFrame(() => {
+      contentEl.scrollTop = scrollY;
+    });
+  },
+  onChange: () => {
+    schedulePersistSession();
+  },
+  onEmpty: () => {
+    // Last tab closed — clear the doc area but keep the folder open
+    // so the user can still browse the sidebar.
+    activeFile = null;
+    markdownEl.innerHTML = "";
+    markdownEl.style.display = "none";
+    emptyState.style.display = "block";
+    contentEl.classList.add("empty");
+    titlebarFilename.textContent = "";
+    outlineNav.innerHTML = "";
+    outlineEl.style.display = "none";
+    setSearchEnabled(false);
+    sidebarTree.setActive(null);
+    void pushRecentsToNativeMenu();
+    schedulePersistSession();
+  },
+});
+
+let sessionPersistTimer: number | null = null;
+function schedulePersistSession(): void {
+  if (sessionPersistTimer !== null) {
+    window.clearTimeout(sessionPersistTimer);
+  }
+  sessionPersistTimer = window.setTimeout(() => {
+    sessionPersistTimer = null;
+    void persistSessionNow();
+  }, 500);
+}
+
+async function persistSessionNow(): Promise<void> {
+  const store = await load(STORE_FILE);
+  const current = await loadSession(store);
+  const state = tabManager.getState();
+  if (state.activeId) {
+    tabManager.captureScrollOfActive(contentEl.scrollTop);
+  }
+  const refreshed = tabManager.getState();
+  const tabs = refreshed.tabs.map((t) => ({
+    filePath: t.filePath,
+    scrollY: t.scrollY,
+  }));
+  const activeIdx = refreshed.activeId
+    ? refreshed.tabs.findIndex((t) => t.id === refreshed.activeId)
+    : -1;
+  await saveSession(store, {
+    folder: current.folder,
+    tabs,
+    activeTabIndex: activeIdx,
+  });
+}
+
+// Monotonic counter so concurrent scans (folder A → folder B before A's
+// async scan finished) can't have the stale result clobber the fresh one.
+// A scan whose generation doesn't match the latest issued is dropped.
+let sidebarScanGeneration = 0;
+
+async function refreshSidebarTree(autoExpandRoot = true): Promise<void> {
+  if (!rootPath) {
+    sidebarTree.clear();
+    return;
+  }
+  const myGen = ++sidebarScanGeneration;
+  const myRoot = rootPath;
+  try {
+    const result = await invoke<ScanResult>("scan_markdown_tree", {
+      root: myRoot,
+    });
+    // Bail if either the user switched folders or kicked off another
+    // scan while ours was in flight. Without this, A → B → setTree(A)
+    // would show the wrong tree.
+    if (myGen !== sidebarScanGeneration || myRoot !== rootPath) {
+      return;
+    }
+    sidebarTree.setTree(result, autoExpandRoot);
+    sidebarTree.setActive(absoluteActiveFile());
+  } catch (e) {
+    console.warn("scan_markdown_tree failed:", e);
+  }
+}
+
+function absoluteActiveFile(): string | null {
+  if (!rootPath || !activeFile) return null;
+  return `${rootPath}/${activeFile}`;
+}
+
+// Used by TabManager.onActivate (and the sidebar click path that goes
+// through it). Loads the file by relative path under the current root,
+// switching roots if the file lives elsewhere.
+async function openFileFromAbsolutePath(absPath: string): Promise<void> {
+  if (!rootPath || !absPath.startsWith(rootPath + "/")) {
+    const lastSep = absPath.lastIndexOf("/");
+    const parentDir = absPath.substring(0, lastSep);
+    const fileName = absPath.substring(lastSep + 1);
+    await setRootPath(parentDir, fileName);
+    await pushToRecents({
+      kind: "file",
+      path: absPath,
+      displayName: fileName,
+    });
+    return;
+  }
+  const relative = absPath.slice(rootPath.length + 1);
+  await loadFile(relative);
+}
+
 const STORE_FILE = "settings.json";
-const STORE_KEY = "lastFolder";
 
 // --- Store persistence ---
+//
+// Folder persistence lives under the session blob (see src/session.ts).
+// We still read the legacy `lastFolder` key on first load so users
+// upgrading from pre-session builds don't lose their working directory.
 
 async function saveRootPath(path: string): Promise<void> {
   const store = await load(STORE_FILE);
-  await store.set(STORE_KEY, path);
-  await store.save();
+  const current = await loadSession(store);
+  await saveSession(store, { ...current, folder: path });
 }
 
 async function loadRootPath(): Promise<string | null> {
   const store = await load(STORE_FILE);
-  return ((await store.get(STORE_KEY)) as string) ?? null;
+  const session = await loadSession(store);
+  return session.folder;
 }
 
 // --- Init ---
 
 openBtn.addEventListener("click", openFolder);
+openFileBtn.addEventListener("click", openFile);
 examplesBtn.addEventListener("click", openExamples);
+welcomeRecentsClear.addEventListener("click", clearRecentsFromUI);
 
 async function openExamples(): Promise<void> {
   const examplesPath = await resolveResource("examples");
@@ -459,11 +752,161 @@ type PendingOpen =
   | { kind: "file"; path: string }
   | { kind: "folder"; path: string };
 
+function basename(p: string): string {
+  const lastSep = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+  return lastSep >= 0 ? p.slice(lastSep + 1) : p;
+}
+
+// Top-level "open this file" entry — used by ⌘O, recents, DnD, the
+// cold-start pending-open buffer, and the open-file Tauri event. Always
+// routes through the tab manager: a new tab if no folder was open or
+// the file is outside the current root; otherwise opens-in-place.
 async function openFileFromPath(filePath: string): Promise<void> {
   const lastSep = filePath.lastIndexOf("/");
-  const parentDir = filePath.substring(0, lastSep);
   const fileName = filePath.substring(lastSep + 1);
-  await setRootPath(parentDir, fileName);
+  await pushToRecents({ kind: "file", path: filePath, displayName: fileName });
+  // openInNewTab is the right primitive here: it dedupes against existing
+  // tabs (re-clicking an already-open file just activates it) and creates
+  // a fresh tab otherwise. The host's onActivate handles root-switching.
+  await tabManager.openInNewTab(filePath);
+}
+
+async function openFile(): Promise<void> {
+  const selected = await open({
+    multiple: false,
+    filters: [
+      { name: "Markdown", extensions: ["md", "markdown", "mdx"] },
+    ],
+  });
+  if (typeof selected === "string") {
+    await openFileFromPath(selected);
+  }
+}
+
+// --- Recents ---
+//
+// In-memory mirror of the persisted list. We keep it here so the welcome
+// screen can re-render synchronously after every push/clear, and so the
+// native menu rebuild has a single source of truth.
+let recentsCache: RecentEntry[] = [];
+let recentsMissing: Set<string> = new Set();
+
+function recentKey(r: { kind: string; path: string }): string {
+  return `${r.kind}:${r.path}`;
+}
+
+async function pushToRecents(
+  entry: Omit<RecentEntry, "lastOpenedAt"> & { lastOpenedAt?: number },
+): Promise<void> {
+  const full: RecentEntry = {
+    ...entry,
+    lastOpenedAt: entry.lastOpenedAt ?? Date.now(),
+  };
+  recentsCache = pushRecent(recentsCache, full);
+  // A freshly opened item exists by definition — clear any stale "missing".
+  recentsMissing.delete(recentKey(full));
+  await persistAndRefreshRecents();
+}
+
+async function persistAndRefreshRecents(): Promise<void> {
+  const store = await load(STORE_FILE);
+  await saveRecents(store, recentsCache);
+  renderWelcomeRecents();
+  await pushRecentsToNativeMenu();
+}
+
+async function pushRecentsToNativeMenu(): Promise<void> {
+  const items = recentsCache.map((r) => ({
+    kind: r.kind,
+    path: r.path,
+    label: r.displayName,
+    enabled: !recentsMissing.has(recentKey(r)),
+  }));
+  try {
+    await invoke("update_menu_state", {
+      items,
+      folderOpen: rootPath !== null,
+      fileOpen: activeFile !== null,
+    });
+  } catch (e) {
+    console.warn("Failed to update menu state:", e);
+  }
+}
+
+function renderWelcomeRecents(): void {
+  const entries: RecentDisplayEntry[] = recentsCache.map((r) => ({
+    ...r,
+    missing: recentsMissing.has(recentKey(r)),
+  }));
+  updateWelcomeVisibility(welcomeRecentsWrap, entries.length > 0);
+  renderRecentsList(welcomeRecentsList, entries, {
+    onOpenRecent: (entry) => openRecentEntry(entry),
+    onReveal: (entry) => revealInFinder(entry.path),
+    onRemove: (entry) => removeRecent(entry),
+    onClear: () => clearRecentsFromUI(),
+  });
+}
+
+async function openRecentEntry(entry: RecentEntry): Promise<void> {
+  if (recentsMissing.has(recentKey(entry))) {
+    showToast(t("toast.recent.missing"), "error");
+    await removeRecent(entry);
+    return;
+  }
+  if (entry.kind === "file") {
+    await openFileFromPath(entry.path);
+  } else {
+    await setRootPath(entry.path);
+    await pushToRecents({
+      kind: "folder",
+      path: entry.path,
+      displayName: entry.displayName,
+    });
+  }
+}
+
+async function removeRecent(entry: RecentEntry): Promise<void> {
+  const key = recentKey(entry);
+  recentsCache = recentsCache.filter((r) => recentKey(r) !== key);
+  recentsMissing.delete(key);
+  await persistAndRefreshRecents();
+}
+
+async function clearRecentsFromUI(): Promise<void> {
+  recentsCache = [];
+  recentsMissing.clear();
+  await persistAndRefreshRecents();
+}
+
+async function revealInFinder(path: string): Promise<void> {
+  try {
+    await invoke("reveal_in_finder", { path });
+  } catch (e) {
+    console.warn("reveal_in_finder failed:", e);
+  }
+}
+
+async function validateRecentsAndRefresh(): Promise<void> {
+  if (recentsCache.length === 0) {
+    renderWelcomeRecents();
+    return;
+  }
+  try {
+    const results = await invoke<Array<{ exists: boolean; kind: string }>>(
+      "validate_paths",
+      { paths: recentsCache.map((r) => r.path) },
+    );
+    recentsMissing = new Set();
+    recentsCache.forEach((r, i) => {
+      if (!results[i]?.exists) {
+        recentsMissing.add(recentKey(r));
+      }
+    });
+  } catch (e) {
+    console.warn("validate_paths failed:", e);
+  }
+  renderWelcomeRecents();
+  await pushRecentsToNativeMenu();
 }
 
 // --- Search ---
@@ -521,6 +964,50 @@ function handleGlobalSearchShortcut(e: KeyboardEvent): void {
   }
 }
 
+// ⌘T / ⌘W / ⌘1..⌘9 / ⌘⇧[ / ⌘⇧]. Registered at init time. Bypassed
+// while typing in form fields so search input shortcuts still work.
+function handleTabShortcut(e: KeyboardEvent): void {
+  const meta = e.metaKey || e.ctrlKey;
+  if (!meta) return;
+  const target = e.target as HTMLElement | null;
+  const inField =
+    target &&
+    (target.tagName === "INPUT" ||
+      target.tagName === "TEXTAREA" ||
+      target.isContentEditable);
+  // Tab cycling is always allowed; the others would steal typing keys.
+  const key = e.key.toLowerCase();
+
+  if (key === "t" && !inField) {
+    e.preventDefault();
+    void openFile();
+    return;
+  }
+  if (key === "w" && !e.shiftKey && !inField) {
+    // ⌘W closes the active tab; falls through to native close-window
+    // only when no tab is open.
+    if (tabManager.getState().tabs.length > 0) {
+      e.preventDefault();
+      void tabManager.closeActive();
+    }
+    return;
+  }
+  if (e.shiftKey && (key === "]" || key === "}")) {
+    e.preventDefault();
+    tabManager.cycle(1);
+    return;
+  }
+  if (e.shiftKey && (key === "[" || key === "{")) {
+    e.preventDefault();
+    tabManager.cycle(-1);
+    return;
+  }
+  if (!inField && /^[1-9]$/.test(key)) {
+    e.preventDefault();
+    tabManager.jumpTo(Number(key));
+  }
+}
+
 function applySearchOptions(): void {
   searchController?.setOptions({
     caseSensitive: searchOptCase.checked,
@@ -570,6 +1057,20 @@ function initSearch(): void {
   searchOptWholeWord.addEventListener("change", applySearchOptions);
 
   document.addEventListener("keydown", handleGlobalSearchShortcut);
+  document.addEventListener("keydown", handleTabShortcut);
+
+  // Persist the scroll position into the active tab so cycling back
+  // returns to the same reading position. Throttled implicitly via
+  // requestAnimationFrame.
+  let scrollRafScheduled = false;
+  contentEl.addEventListener("scroll", () => {
+    if (scrollRafScheduled) return;
+    scrollRafScheduled = true;
+    requestAnimationFrame(() => {
+      scrollRafScheduled = false;
+      tabManager.captureScrollOfActive(contentEl.scrollTop);
+    });
+  });
 }
 
 // --- Preferences modal ---
@@ -1394,16 +1895,180 @@ async function initLocale(): Promise<void> {
   document.documentElement.lang = locale;
 }
 
+// --- Auto-updater + What's New wiring ---
+
+const updateBanner = document.getElementById("update-banner") as HTMLDivElement;
+const updateBannerMsg = document.getElementById(
+  "update-banner-msg",
+) as HTMLSpanElement;
+const updateBannerInstall = document.getElementById(
+  "update-banner-install",
+) as HTMLButtonElement;
+const updateBannerLater = document.getElementById(
+  "update-banner-later",
+) as HTMLButtonElement;
+const updateBannerNotes = document.getElementById(
+  "update-banner-notes",
+) as HTMLButtonElement;
+const prefsAutoUpdate = document.getElementById(
+  "prefs-auto-update",
+) as HTMLInputElement;
+const whatsnewBackdrop = document.getElementById(
+  "whatsnew-backdrop",
+) as HTMLDivElement;
+const whatsnewTitle = document.getElementById(
+  "whatsnew-title",
+) as HTMLHeadingElement;
+const whatsnewSubtitle = document.getElementById(
+  "whatsnew-subtitle",
+) as HTMLParagraphElement;
+const whatsnewBody = document.getElementById(
+  "whatsnew-body",
+) as HTMLDivElement;
+const whatsnewClose = document.getElementById(
+  "whatsnew-close",
+) as HTMLButtonElement;
+const whatsnewDone = document.getElementById(
+  "whatsnew-done",
+) as HTMLButtonElement;
+const whatsnewViewNotes = document.getElementById(
+  "whatsnew-view-notes",
+) as HTMLButtonElement;
+
+let whatsnewReleaseUrl: string | null = null;
+
+let currentBannerHandler: ((action: BannerAction) => void) | null = null;
+
+function showUpdateBanner(
+  update: Update,
+  onAction: (action: BannerAction) => void,
+): void {
+  updateBannerMsg.textContent = t("updater.banner.msg").replace(
+    "{version}",
+    update.version,
+  );
+  currentBannerHandler = onAction;
+  updateBanner.style.display = "flex";
+}
+
+function hideUpdateBanner(): void {
+  updateBanner.style.display = "none";
+  currentBannerHandler = null;
+}
+
+function formatReleaseDate(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  // Localized "May 13, 2026" / "13 mai 2026" via the current locale.
+  return d.toLocaleDateString(document.documentElement.lang || undefined, {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+}
+
+function showWhatsNewModal(
+  version: string,
+  info: { htmlBody: string; publishedAt: string | null; releaseUrl: string | null },
+): void {
+  whatsnewTitle.textContent = `Markdown Viewer ${version}`;
+  const date = formatReleaseDate(info.publishedAt);
+  whatsnewSubtitle.textContent = date
+    ? t("whatsnew.subtitle.released").replace("{date}", date)
+    : "";
+  // htmlBody comes from parseMarkdown() which is DOMPurify-sanitized.
+  whatsnewBody.innerHTML = info.htmlBody;
+  whatsnewReleaseUrl = info.releaseUrl;
+  whatsnewViewNotes.hidden = !info.releaseUrl;
+  whatsnewBackdrop.style.display = "flex";
+  requestAnimationFrame(() => whatsnewBackdrop.classList.add("visible"));
+}
+
+function hideWhatsNewModal(): void {
+  whatsnewBackdrop.classList.remove("visible");
+  window.setTimeout(() => {
+    whatsnewBackdrop.style.display = "none";
+    whatsnewBody.innerHTML = "";
+    whatsnewSubtitle.textContent = "";
+    whatsnewReleaseUrl = null;
+    whatsnewViewNotes.hidden = true;
+  }, 150);
+}
+
+function initUpdaterUI(): void {
+  updateBannerInstall.addEventListener("click", () => {
+    currentBannerHandler?.({ type: "install" });
+  });
+  updateBannerLater.addEventListener("click", () => {
+    currentBannerHandler?.({ type: "later" });
+  });
+  updateBannerNotes.addEventListener("click", () => {
+    currentBannerHandler?.({ type: "notes" });
+  });
+
+  whatsnewClose.addEventListener("click", hideWhatsNewModal);
+  whatsnewDone.addEventListener("click", hideWhatsNewModal);
+  whatsnewViewNotes.addEventListener("click", () => {
+    if (whatsnewReleaseUrl) void openUrl(whatsnewReleaseUrl);
+  });
+  whatsnewBackdrop.addEventListener("click", (e) => {
+    if (e.target === whatsnewBackdrop) hideWhatsNewModal();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (
+      e.key === "Escape" &&
+      whatsnewBackdrop.classList.contains("visible")
+    ) {
+      e.preventDefault();
+      hideWhatsNewModal();
+    }
+  });
+
+  prefsAutoUpdate.addEventListener("change", async () => {
+    await savePref(AUTO_CHECK_KEY, prefsAutoUpdate.checked);
+  });
+}
+
+async function syncAutoUpdatePref(): Promise<void> {
+  const store = await load(STORE_FILE);
+  const v = await store.get(AUTO_CHECK_KEY);
+  // Default checked; only flip off when explicitly stored as false.
+  prefsAutoUpdate.checked = v !== false;
+}
+
+async function buildUpdaterDeps(): Promise<UpdaterDeps> {
+  const store = await load(STORE_FILE);
+  return {
+    store,
+    showBanner: showUpdateBanner,
+    hideBanner: hideUpdateBanner,
+  };
+}
+
 async function init(): Promise<void> {
   await initLocale();
   await initTheme();
   initSearch();
   initPreferences();
+  initUpdaterUI();
+  await syncAutoUpdatePref();
   const appWindow = getCurrentWindow();
 
+  // Load recents once at startup, validate existence (dim missing entries),
+  // and prime both the welcome list and the native Open Recent submenu.
+  const store = await load(STORE_FILE);
+  recentsCache = await loadRecentsFromStore(store);
+  await validateRecentsAndRefresh();
+
   // Runtime opens (hot-start file association, "Open With", CLI events)
-  appWindow.listen<string>("open-folder", (event) => {
-    setRootPath(event.payload);
+  appWindow.listen<string>("open-folder", async (event) => {
+    await setRootPath(event.payload);
+    await pushToRecents({
+      kind: "folder",
+      path: event.payload,
+      displayName: extractRootName(event.payload),
+    });
   });
   appWindow.listen<string>("open-file", (event) => {
     openFileFromPath(event.payload);
@@ -1411,8 +2076,104 @@ async function init(): Promise<void> {
   appWindow.listen("menu-open-folder", () => {
     openFolder();
   });
+  appWindow.listen("menu-open-file", () => {
+    openFile();
+  });
+  appWindow.listen<{ kind: "file" | "folder"; path: string }>(
+    "menu-open-recent",
+    async (event) => {
+      const { kind, path } = event.payload;
+      const cached = recentsCache.find(
+        (r) => r.kind === kind && r.path === path,
+      );
+      const entry: RecentEntry = cached ?? {
+        kind,
+        path,
+        displayName: basename(path),
+        lastOpenedAt: Date.now(),
+      };
+      await openRecentEntry(entry);
+    },
+  );
+  appWindow.listen("menu-clear-recents", () => {
+    clearRecentsFromUI();
+  });
+  appWindow.listen("menu-close-folder", () => {
+    closeFolder();
+  });
+  appWindow.listen("menu-save", () => {
+    runSave();
+  });
+  appWindow.listen<ExportFormat>("menu-export", (event) => {
+    exportAs(event.payload);
+  });
+  appWindow.listen("menu-share", () => {
+    runShare();
+  });
+  appWindow.listen("menu-print", () => {
+    invoke("print_webview");
+  });
   appWindow.listen("menu-open-preferences", () => {
     openPrefs();
+  });
+  appWindow.listen("menu-check-updates", async () => {
+    const deps = await buildUpdaterDeps();
+    void manualCheck(deps);
+  });
+  appWindow.listen("menu-whats-new", async () => {
+    const deps = await buildUpdaterDeps();
+    void showManually({ store: deps.store, showModal: showWhatsNewModal });
+  });
+
+  // Live tree updates from the Rust watcher. Debounced beyond the 200ms
+  // backend debounce so a slow filesystem (cloud, network) doesn't keep
+  // re-scanning while events trickle in.
+  let rescanTimer: number | null = null;
+  appWindow.listen("fs-change", () => {
+    if (rescanTimer !== null) window.clearTimeout(rescanTimer);
+    rescanTimer = window.setTimeout(() => {
+      rescanTimer = null;
+      // autoExpandRoot=false so the user's expansion state survives.
+      void refreshSidebarTree(false);
+    }, 150);
+  });
+
+  // Drag & drop: accept .md/.markdown/.mdx files and directories.
+  appWindow.onDragDropEvent(async (event) => {
+    if (event.payload.type !== "drop") return;
+    const paths = (event.payload as { type: "drop"; paths: string[] }).paths;
+    for (const p of paths) {
+      const lower = p.toLowerCase();
+      const isMarkdown =
+        lower.endsWith(".md") ||
+        lower.endsWith(".markdown") ||
+        lower.endsWith(".mdx");
+      try {
+        const [valid] = await invoke<
+          Array<{ exists: boolean; kind: string }>
+        >("validate_paths", { paths: [p] });
+        if (!valid?.exists) {
+          showToast(t("toast.dnd.rejected"), "error");
+          continue;
+        }
+        if (valid.kind === "dir") {
+          await setRootPath(p);
+          await pushToRecents({
+            kind: "folder",
+            path: p,
+            displayName: extractRootName(p),
+          });
+          return;
+        }
+        if (valid.kind === "file" && isMarkdown) {
+          await openFileFromPath(p);
+          return;
+        }
+        showToast(t("toast.dnd.rejected"), "error");
+      } catch (e) {
+        console.warn("DnD validation failed:", e);
+      }
+    }
   });
 
   // Cold-start: pull anything the backend buffered (CLI arg or RunEvent::Opened
@@ -1428,11 +2189,62 @@ async function init(): Promise<void> {
     return;
   }
 
-  const saved = await loadRootPath();
-  if (saved) {
-    await setRootPath(saved);
+  const savedSession = await loadSession(store);
+  if (savedSession.folder) {
+    await setRootPath(savedSession.folder);
+  }
+  // Restore tabs after the root is set so file paths resolve. Validate
+  // each tab still exists on disk AND is a file (not a directory left
+  // behind by a poisoned session.json). Silently drop everything else.
+  if (savedSession.tabs.length > 0) {
+    const paths = savedSession.tabs.map((t) => t.filePath);
+    let validity: Array<{ exists: boolean; kind: string }> = [];
+    try {
+      validity = await invoke<Array<{ exists: boolean; kind: string }>>(
+        "validate_paths",
+        { paths },
+      );
+    } catch {
+      validity = paths.map(() => ({ exists: false, kind: "missing" }));
+    }
+    const surviving = savedSession.tabs.filter(
+      (_, i) => validity[i]?.exists && validity[i]?.kind === "file",
+    );
+    if (surviving.length > 0) {
+      // IDs are prefixed with "restored-" to avoid colliding with the
+      // module-level counter used by openInNewTab. Without this, the
+      // first new tab opened after a restore would get id "tab-1" —
+      // the same as the first restored tab — and clicking one would
+      // mis-activate the other.
+      //
+      // Guard: this collision-avoidance assumes restore-with-tabs runs
+      // at most once per process. A future refactor that calls it
+      // twice would silently re-allocate "restored-1" and produce
+      // duplicates. Trip an error if that ever happens so the bug
+      // surfaces immediately.
+      if (sessionRestored) {
+        throw new Error(
+          "session restore called twice — restored- IDs would collide",
+        );
+      }
+      sessionRestored = true;
+      const restoredTabs: Tab[] = surviving.map((t, i) => ({
+        id: `restored-${i + 1}`,
+        filePath: t.filePath,
+        title: t.filePath.split("/").pop()?.replace(/\.[^.]+$/, "") ?? "tab",
+        scrollY: t.scrollY,
+      }));
+      const activeIdx = Math.max(
+        0,
+        Math.min(savedSession.activeTabIndex, restoredTabs.length - 1),
+      );
+      await tabManager.restore(restoredTabs, restoredTabs[activeIdx].id);
+      await tabManager.activate(restoredTabs[activeIdx].id);
+    }
   }
 }
+
+let sessionRestored = false;
 
 async function setRootPath(path: string, fileToOpen?: string): Promise<void> {
   rootPath = path;
@@ -1440,11 +2252,65 @@ async function setRootPath(path: string, fileToOpen?: string): Promise<void> {
   currentPath = [];
   activeFile = null;
   await saveRootPath(path);
+  // Tell the backend so reveal_in_finder can authorize paths under this
+  // root. Best-effort: a failure here only narrows allowed scope.
+  invoke("register_current_root", { path }).catch((e) => {
+    console.warn("register_current_root failed:", e);
+  });
   await renderSidebar();
   if (fileToOpen) {
+    // fileToOpen is relative to the new root; load directly so we don't
+    // re-trigger root-resolution through the tab manager.
     await loadFile(fileToOpen);
   } else {
     await autoSelectReadme();
+  }
+  // Keep the native Close Folder item in sync with the open state.
+  await pushRecentsToNativeMenu();
+  // Replace any existing watcher for this window. start_watch is
+  // idempotent in the sense that the Rust side drops the previous one
+  // before installing a new watch, so switching folders is safe.
+  try {
+    await invoke("start_watch", { root: path });
+  } catch (e) {
+    console.warn("start_watch failed:", e);
+  }
+}
+
+async function closeFolder(): Promise<void> {
+  rootPath = null;
+  rootName = "";
+  currentPath = [];
+  activeFile = null;
+  // Close all tabs so the doc area returns to the welcome state.
+  // Restore-on-relaunch persists session.tabs separately; closing the
+  // folder is an explicit "start fresh" gesture.
+  await tabManager.restore([], null);
+  sidebarTree.clear();
+  breadcrumb.innerHTML = "";
+  markdownEl.innerHTML = "";
+  markdownEl.style.display = "none";
+  emptyState.style.display = "block";
+  contentEl.classList.add("empty");
+  titlebarFilename.textContent = "";
+  outlineNav.innerHTML = "";
+  outlineEl.style.display = "none";
+  setSearchEnabled(false);
+  // Persist: clear session.folder so a fresh launch lands on the welcome
+  // screen rather than reopening this closed folder.
+  const store = await load(STORE_FILE);
+  const current = await loadSession(store);
+  await saveSession(store, { ...current, folder: null });
+  await pushRecentsToNativeMenu();
+  // Clear the backend's notion of "current root" so reveal_in_finder
+  // tightens scope back to recents-only.
+  invoke("register_current_root", { path: null }).catch((e) => {
+    console.warn("register_current_root failed:", e);
+  });
+  try {
+    await invoke("stop_watch");
+  } catch (e) {
+    console.warn("stop_watch failed:", e);
   }
 }
 
@@ -1452,6 +2318,11 @@ async function openFolder(): Promise<void> {
   const selected = await open({ directory: true, multiple: false });
   if (selected) {
     await setRootPath(selected);
+    await pushToRecents({
+      kind: "folder",
+      path: selected,
+      displayName: extractRootName(selected),
+    });
   }
 }
 
@@ -1463,12 +2334,13 @@ async function listEntries(dirPath: string): Promise<Entry[]> {
 }
 
 // --- Sidebar ---
-
-async function renderSidebar(): Promise<void> {
-  const dirPath = getFullPath(rootPath!, currentPath);
-  const entries = await listEntries(dirPath);
-  fileList.innerHTML = "";
-
+//
+// The flat single-folder list + breadcrumb used to live here. PR 3 swapped
+// it for a recursive markdown-only tree (sidebar-tree.ts). `renderSidebar`
+// is kept as the call-site entry point so existing callers don't need to
+// know about the tree; it now just delegates to the SidebarTree instance
+// and keeps the empty-state side effects centralized here.
+async function renderSidebar(autoExpandRoot = true): Promise<void> {
   emptyState.style.display = "none";
   markdownEl.style.display = activeFile ? "block" : "none";
   if (!activeFile) {
@@ -1477,82 +2349,8 @@ async function renderSidebar(): Promise<void> {
     titlebarFilename.textContent = "";
     setSearchEnabled(false);
   }
-
-  if (currentPath.length > 0) {
-    const back = document.createElement("div");
-    back.className = "file-item";
-    const backIcon = document.createElement("span");
-    backIcon.className = "icon";
-    backIcon.textContent = "..";
-    const backName = document.createElement("span");
-    backName.className = "name";
-    backName.textContent = t("sidebar.parent");
-    back.append(backIcon, backName);
-    back.addEventListener("click", () => {
-      currentPath.pop();
-      renderSidebar();
-    });
-    fileList.appendChild(back);
-  }
-
-  for (const entry of entries) {
-    const item = document.createElement("div");
-    item.className = "file-item";
-    const icon = entry.kind === "directory" ? "\u{1F4C1}" : "\u{1F4C4}";
-    item.innerHTML = `<span class="icon">${icon}</span><span class="name">${entry.name}</span>`;
-
-    if (entry.kind === "directory") {
-      item.addEventListener("click", () => {
-        currentPath.push(entry.name);
-        renderSidebar();
-      });
-    } else {
-      const filePath = [...currentPath, entry.name].join("/");
-      if (filePath === activeFile) item.classList.add("active");
-      item.addEventListener("click", () => loadFile(filePath));
-    }
-    fileList.appendChild(item);
-  }
-  renderBreadcrumb();
-}
-
-function renderBreadcrumb(): void {
   breadcrumb.innerHTML = "";
-
-  const changeBtn = document.createElement("span");
-  changeBtn.textContent = "\u21C4";
-  changeBtn.title = t("breadcrumb.change");
-  changeBtn.style.cssText =
-    "cursor:pointer;font-size:14px;margin-right:4px;opacity:0.6;";
-  changeBtn.addEventListener("click", openFolder);
-  breadcrumb.appendChild(changeBtn);
-
-  const root = document.createElement("span");
-  root.textContent = rootName;
-  if (currentPath.length > 0) {
-    root.addEventListener("click", () => {
-      currentPath = [];
-      renderSidebar();
-    });
-  } else {
-    root.classList.add("current");
-  }
-  breadcrumb.appendChild(root);
-
-  currentPath.forEach((part, i) => {
-    breadcrumb.appendChild(document.createTextNode(" / "));
-    const span = document.createElement("span");
-    span.textContent = part;
-    if (i < currentPath.length - 1) {
-      span.addEventListener("click", () => {
-        currentPath = currentPath.slice(0, i + 1);
-        renderSidebar();
-      });
-    } else {
-      span.classList.add("current");
-    }
-    breadcrumb.appendChild(span);
-  });
+  await refreshSidebarTree(autoExpandRoot);
 }
 
 // --- File loading ---
@@ -1591,6 +2389,11 @@ async function loadFile(filePath: string): Promise<void> {
     const text = await readTextFile(fullPath);
 
     activeFile = filePath;
+    // Tell the backend this absolute path is now a "live document" so
+    // commands that hand files to the OS (share_macos) accept it.
+    invoke("register_active_doc", { path: fullPath }).catch((e) => {
+      console.warn("register_active_doc failed:", e);
+    });
     emptyState.style.display = "none";
     markdownEl.style.display = "block";
     contentEl.classList.remove("empty");
@@ -1606,17 +2409,19 @@ async function loadFile(filePath: string): Promise<void> {
     const fileDir = filePath.split("/").slice(0, -1);
     if (fileDir.join("/") !== currentPath.join("/")) {
       currentPath = fileDir;
-      await renderSidebar();
     }
 
     const currentDir = filePath.split("/").slice(0, -1);
     interceptLinks(currentDir);
-    highlightSidebar();
+    sidebarTree.setActive(absoluteActiveFile());
     buildOutline();
 
     titlebarFilename.textContent = filePath.split("/").pop() ?? "";
     setSearchEnabled(true);
     searchController?.reset();
+    // Save / Save As / Share / Print depend on a file being open — keep
+    // the native menu's enabled state in sync.
+    await pushRecentsToNativeMenu();
   } catch (e) {
     console.error("Failed to load file:", filePath, e);
   }
@@ -1718,20 +2523,14 @@ function interceptLinks(currentDir: string[]): void {
   }
 }
 
-function highlightSidebar(): void {
-  for (const item of fileList.querySelectorAll(".file-item")) {
-    item.classList.remove("active");
-  }
-  if (!activeFile) return;
-  const activeName = activeFile.split("/").pop();
-  const activeDir = activeFile.split("/").slice(0, -1).join("/");
-  if (activeDir === currentPath.join("/")) {
-    for (const item of fileList.querySelectorAll(".file-item")) {
-      if (item.querySelector(".name")?.textContent === activeName) {
-        item.classList.add("active");
-      }
-    }
-  }
-}
-
 init();
+
+// Deferred so the network calls don't slow cold launch.
+window.setTimeout(async () => {
+  const deps = await buildUpdaterDeps();
+  void autoCheckOnStartup(deps);
+  void autoShowAfterUpdate({
+    store: deps.store,
+    showModal: showWhatsNewModal,
+  });
+}, 1500);
