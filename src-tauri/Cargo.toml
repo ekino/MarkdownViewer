@@ -39,4 +39,5 @@ tempfile = "3"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSData", "NSError", "NSString"] }
 objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKPDFConfiguration", "block2", "objc2-app-kit"] }
+objc2-app-kit = { version = "0.3", features = ["NSSharingService", "NSView", "NSResponder", "NSWindow", "NSGraphicsContext", "block2"] }
 block2 = "0.6"

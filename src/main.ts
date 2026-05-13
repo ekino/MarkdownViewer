@@ -29,6 +29,7 @@ import {
   type RecentEntry,
 } from "./recents";
 import { loadSession, saveSession } from "./session";
+import { runExport, type ExportFormat } from "./export";
 import { SidebarTree, type ScanResult } from "./sidebar-tree";
 import { showToast } from "./toast";
 import {
@@ -248,6 +249,105 @@ pdfBtn.addEventListener("click", async () => {
     document.body.classList.remove("print-mode");
   }
 });
+
+// Save / Export — wired by the native File menu.
+//
+// Tauri's save() doesn't show a format picker inside the OS dialog, so
+// instead of one ambiguous "Save As" we expose one menu item per format
+// (each with its own single-filter native dialog). ⌘S replays whichever
+// format the user last picked for the active file.
+const lastExportFormatByFile = new Map<string, ExportFormat>();
+
+const FORMAT_FILTER: Record<ExportFormat, { name: string; ext: string }> = {
+  pdf: { name: "PDF", ext: "pdf" },
+  "html-standalone": { name: "HTML (standalone)", ext: "html" },
+  "html-with-assets": { name: "HTML + assets", ext: "html" },
+  "md-copy": { name: "Markdown source", ext: "md" },
+};
+
+function activeAbsoluteFile(): string | null {
+  return absoluteActiveFile();
+}
+
+function activeDefaultStem(): string {
+  if (!activeFile) return "document";
+  const name = activeFile.split("/").pop() ?? "document.md";
+  return name.replace(/\.[^.]+$/, "");
+}
+
+async function exportAs(format: ExportFormat): Promise<void> {
+  const sourcePath = activeAbsoluteFile();
+  if (!sourcePath) return;
+  const filter = FORMAT_FILTER[format];
+  const outputPath = await save({
+    defaultPath: `${activeDefaultStem()}.${filter.ext}`,
+    filters: [{ name: filter.name, extensions: [filter.ext] }],
+  });
+  if (!outputPath) return;
+  await performExport(format, sourcePath, outputPath);
+}
+
+async function runSave(): Promise<void> {
+  const sourcePath = activeAbsoluteFile();
+  if (!sourcePath) return;
+  // First save on this file → fall back to PDF, the most common choice.
+  const format = lastExportFormatByFile.get(sourcePath) ?? "pdf";
+  await exportAs(format);
+}
+
+async function performExport(
+  format: ExportFormat,
+  sourcePath: string,
+  outputPath: string,
+): Promise<void> {
+  // The PDF pipeline needs the print-mode body class around the WKWebView
+  // capture, just like the existing PDF button flow.
+  const wantsPdf = format === "pdf";
+  if (wantsPdf) document.body.classList.add("print-mode");
+  try {
+    if (wantsPdf) await new Promise((r) => setTimeout(r, 150));
+    await runExport(
+      format,
+      {
+        sourcePath,
+        rootPath,
+        markdownEl,
+        defaultStem: activeDefaultStem(),
+      },
+      {
+        // We provide the outputPath directly via a stub save() that
+        // returns it unchanged — runExport's save() prompt was already
+        // handled by runSave/runSaveAs above.
+        save: async () => outputPath,
+        invoke: invoke as unknown as (
+          cmd: string,
+          args?: Record<string, unknown>,
+        ) => Promise<unknown>,
+      },
+    );
+    lastExportFormatByFile.set(sourcePath, format);
+  } catch (e) {
+    console.error("Export failed:", e);
+    showToast(`Export failed: ${e}`, "error");
+  } finally {
+    if (wantsPdf) document.body.classList.remove("print-mode");
+  }
+}
+
+// macOS Share — only invokable from the menu on macOS; on other OSes
+// the menu item isn't rendered, so this handler is a no-op fallback.
+async function runShare(): Promise<void> {
+  const sourcePath = activeAbsoluteFile();
+  if (!sourcePath) return;
+  // Anchor the share sheet to the top-right of the titlebar (rough but
+  // adequate — sanitize_rect on the Rust side clamps to the view).
+  const rect = { x: window.innerWidth - 80, y: 8, width: 32, height: 24 };
+  try {
+    await invoke("share_macos", { paths: [sourcePath], anchor: rect });
+  } catch (e) {
+    console.warn("share_macos failed:", e);
+  }
+}
 
 themeToggle.addEventListener("click", async () => {
   const activeId = activeThemeId();
@@ -618,6 +718,7 @@ async function pushRecentsToNativeMenu(): Promise<void> {
     await invoke("update_menu_state", {
       items,
       folderOpen: rootPath !== null,
+      fileOpen: activeFile !== null,
     });
   } catch (e) {
     console.warn("Failed to update menu state:", e);
@@ -1681,6 +1782,15 @@ async function init(): Promise<void> {
   appWindow.listen("menu-close-folder", () => {
     closeFolder();
   });
+  appWindow.listen("menu-save", () => {
+    runSave();
+  });
+  appWindow.listen<ExportFormat>("menu-export", (event) => {
+    exportAs(event.payload);
+  });
+  appWindow.listen("menu-share", () => {
+    runShare();
+  });
   appWindow.listen("menu-print", () => {
     invoke("print_webview");
   });
@@ -1764,6 +1874,11 @@ async function setRootPath(path: string, fileToOpen?: string): Promise<void> {
   currentPath = [];
   activeFile = null;
   await saveRootPath(path);
+  // Tell the backend so reveal_in_finder can authorize paths under this
+  // root. Best-effort: a failure here only narrows allowed scope.
+  invoke("register_current_root", { path }).catch((e) => {
+    console.warn("register_current_root failed:", e);
+  });
   await renderSidebar();
   if (fileToOpen) {
     await loadFile(fileToOpen);
@@ -1803,6 +1918,11 @@ async function closeFolder(): Promise<void> {
   const current = await loadSession(store);
   await saveSession(store, { ...current, folder: null });
   await pushRecentsToNativeMenu();
+  // Clear the backend's notion of "current root" so reveal_in_finder
+  // tightens scope back to recents-only.
+  invoke("register_current_root", { path: null }).catch((e) => {
+    console.warn("register_current_root failed:", e);
+  });
   try {
     await invoke("stop_watch");
   } catch (e) {
@@ -1885,6 +2005,11 @@ async function loadFile(filePath: string): Promise<void> {
     const text = await readTextFile(fullPath);
 
     activeFile = filePath;
+    // Tell the backend this absolute path is now a "live document" so
+    // commands that hand files to the OS (share_macos) accept it.
+    invoke("register_active_doc", { path: fullPath }).catch((e) => {
+      console.warn("register_active_doc failed:", e);
+    });
     emptyState.style.display = "none";
     markdownEl.style.display = "block";
     contentEl.classList.remove("empty");
@@ -1910,6 +2035,9 @@ async function loadFile(filePath: string): Promise<void> {
     titlebarFilename.textContent = filePath.split("/").pop() ?? "";
     setSearchEnabled(true);
     searchController?.reset();
+    // Save / Save As / Share / Print depend on a file being open — keep
+    // the native menu's enabled state in sync.
+    await pushRecentsToNativeMenu();
   } catch (e) {
     console.error("Failed to load file:", filePath, e);
   }

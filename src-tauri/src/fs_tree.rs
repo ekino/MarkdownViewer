@@ -15,6 +15,12 @@ use std::path::{Path, PathBuf};
 // size (each node ≈ 200 bytes JSON → ~10 MB ceiling).
 const MAX_DEPTH: usize = 15;
 const MAX_NODES: usize = 50_000;
+// Independent cap on entries *visited* during the scan, not just those
+// kept in the output tree. Pruned-empty dirs (e.g. node_modules) don't
+// bump MAX_NODES because they never enter the output, so a directory
+// bomb of millions of empty subdirs could stall the scan indefinitely.
+// This second counter bounds total work regardless of pruning.
+const MAX_VISITED: usize = MAX_NODES * 4;
 
 #[derive(Serialize, Debug, Clone)]
 #[serde(tag = "kind", rename_all = "lowercase")]
@@ -48,8 +54,9 @@ fn is_markdown(path: &Path) -> bool {
 
 pub fn scan(root: &Path) -> std::io::Result<ScanResult> {
     let mut node_count = 0usize;
+    let mut visited = 0usize;
     let mut truncated = false;
-    let root_node = build_dir(root, 0, &mut node_count, &mut truncated)?;
+    let root_node = build_dir(root, 0, &mut node_count, &mut visited, &mut truncated)?;
     // Prune the root: if it contains no markdown anywhere, return None
     // so the renderer can show an "(empty)" state instead of an unused
     // top-level entry.
@@ -64,13 +71,14 @@ fn build_dir(
     dir: &Path,
     depth: usize,
     node_count: &mut usize,
+    visited: &mut usize,
     truncated: &mut bool,
 ) -> std::io::Result<Option<TreeNode>> {
     if depth > MAX_DEPTH {
         *truncated = true;
         return Ok(None);
     }
-    if *node_count >= MAX_NODES {
+    if *node_count >= MAX_NODES || *visited >= MAX_VISITED {
         *truncated = true;
         return Ok(None);
     }
@@ -102,7 +110,8 @@ fn build_dir(
     });
 
     for path in collected {
-        if *node_count >= MAX_NODES {
+        *visited += 1;
+        if *node_count >= MAX_NODES || *visited >= MAX_VISITED {
             *truncated = true;
             break;
         }
@@ -126,7 +135,7 @@ fn build_dir(
         let path_str = path.to_string_lossy().to_string();
 
         if meta.is_dir() {
-            if let Some(node) = build_dir(&path, depth + 1, node_count, truncated)? {
+            if let Some(node) = build_dir(&path, depth + 1, node_count, visited, truncated)? {
                 // Only include a directory if it actually has markdown
                 // somewhere underneath (filtered out otherwise).
                 if let TreeNode::Dir { children: sub, .. } = &node {
@@ -156,12 +165,19 @@ fn build_dir(
     }))
 }
 
+// Async so the recursive scan runs on the blocking pool instead of
+// blocking the IPC worker thread. A large tree on a slow filesystem
+// (network mount, iCloud Drive) would otherwise starve other commands.
 #[tauri::command]
-pub fn scan_markdown_tree(root: String) -> Result<ScanResult, String> {
+pub async fn scan_markdown_tree(root: String) -> Result<ScanResult, String> {
     if root.is_empty() || root.len() > 4096 {
         return Err("invalid root".into());
     }
-    scan(Path::new(&root)).map_err(|e| e.to_string())
+    tokio::task::spawn_blocking(move || {
+        scan(Path::new(&root)).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("join error: {e}"))?
 }
 
 #[cfg(test)]
