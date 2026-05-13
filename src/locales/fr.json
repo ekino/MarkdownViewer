@@ -46,6 +46,28 @@
   "prefs.outline.always": "Toujours",
   "prefs.outline.hidden": "Caché",
 
+  "prefs.general.updates.title": "Mises à jour",
+  "prefs.general.updates.hint": "Vérifier au démarrage si une nouvelle version est disponible.",
+  "prefs.general.updates.label": "Vérifier automatiquement",
+
+  "updater.banner.msg": "La version {version} est disponible.",
+  "updater.banner.install": "Installer",
+  "updater.banner.later": "Plus tard",
+  "updater.banner.notes": "Notes de version",
+  "updater.uptodate": "Vous êtes à jour.",
+  "updater.check.failed": "Impossible de vérifier les mises à jour. Réessayez plus tard.",
+  "updater.installing": "Téléchargement de la mise à jour…",
+  "updater.install.failed": "Échec de la mise à jour. Téléchargez manuellement depuis la page de version.",
+  "updater.source.untrusted": "Mise à jour refusée : le manifest provient d'une source non fiable.",
+  "updater.confirm.title": "Installer la mise à jour ?",
+  "updater.confirm.message": "Markdown Viewer va télécharger la version {version} depuis {url}, vérifier sa signature, puis redémarrer. Continuer ?",
+  "updater.confirm.ok": "Installer",
+  "updater.confirm.cancel": "Annuler",
+
+  "whatsnew.subtitle.released": "Publié le {date}",
+  "whatsnew.view": "Voir sur GitHub",
+  "whatsnew.unavailable": "Les notes de version ne sont pas disponibles hors ligne. Consultez la page GitHub.",
+
   "prefs.fonts.size.title": "Taille",
   "prefs.fonts.size.hint": "Préréglage rapide pour le texte du document",
   "prefs.fonts.size.small": "Petit",

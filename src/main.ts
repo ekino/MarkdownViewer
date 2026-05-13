@@ -34,6 +34,15 @@ import { SidebarTree, type ScanResult } from "./sidebar-tree";
 import { TabManager, type Tab } from "./tabs";
 import { showToast } from "./toast";
 import {
+  AUTO_CHECK_KEY,
+  autoCheckOnStartup,
+  manualCheck,
+  type BannerAction,
+  type UpdaterDeps,
+} from "./updater";
+import { autoShowAfterUpdate, showManually } from "./whats-new";
+import type { Update } from "@tauri-apps/plugin-updater";
+import {
   renderRecentsList,
   showContextMenu,
   updateWelcomeVisibility,
@@ -1886,11 +1895,164 @@ async function initLocale(): Promise<void> {
   document.documentElement.lang = locale;
 }
 
+// --- Auto-updater + What's New wiring ---
+
+const updateBanner = document.getElementById("update-banner") as HTMLDivElement;
+const updateBannerMsg = document.getElementById(
+  "update-banner-msg",
+) as HTMLSpanElement;
+const updateBannerInstall = document.getElementById(
+  "update-banner-install",
+) as HTMLButtonElement;
+const updateBannerLater = document.getElementById(
+  "update-banner-later",
+) as HTMLButtonElement;
+const updateBannerNotes = document.getElementById(
+  "update-banner-notes",
+) as HTMLButtonElement;
+const prefsAutoUpdate = document.getElementById(
+  "prefs-auto-update",
+) as HTMLInputElement;
+const whatsnewBackdrop = document.getElementById(
+  "whatsnew-backdrop",
+) as HTMLDivElement;
+const whatsnewTitle = document.getElementById(
+  "whatsnew-title",
+) as HTMLHeadingElement;
+const whatsnewSubtitle = document.getElementById(
+  "whatsnew-subtitle",
+) as HTMLParagraphElement;
+const whatsnewBody = document.getElementById(
+  "whatsnew-body",
+) as HTMLDivElement;
+const whatsnewClose = document.getElementById(
+  "whatsnew-close",
+) as HTMLButtonElement;
+const whatsnewDone = document.getElementById(
+  "whatsnew-done",
+) as HTMLButtonElement;
+const whatsnewViewNotes = document.getElementById(
+  "whatsnew-view-notes",
+) as HTMLButtonElement;
+
+let whatsnewReleaseUrl: string | null = null;
+
+let currentBannerHandler: ((action: BannerAction) => void) | null = null;
+
+function showUpdateBanner(
+  update: Update,
+  onAction: (action: BannerAction) => void,
+): void {
+  updateBannerMsg.textContent = t("updater.banner.msg").replace(
+    "{version}",
+    update.version,
+  );
+  currentBannerHandler = onAction;
+  updateBanner.style.display = "flex";
+}
+
+function hideUpdateBanner(): void {
+  updateBanner.style.display = "none";
+  currentBannerHandler = null;
+}
+
+function formatReleaseDate(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  // Localized "May 13, 2026" / "13 mai 2026" via the current locale.
+  return d.toLocaleDateString(document.documentElement.lang || undefined, {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+}
+
+function showWhatsNewModal(
+  version: string,
+  info: { htmlBody: string; publishedAt: string | null; releaseUrl: string | null },
+): void {
+  whatsnewTitle.textContent = `Markdown Viewer ${version}`;
+  const date = formatReleaseDate(info.publishedAt);
+  whatsnewSubtitle.textContent = date
+    ? t("whatsnew.subtitle.released").replace("{date}", date)
+    : "";
+  // htmlBody comes from parseMarkdown() which is DOMPurify-sanitized.
+  whatsnewBody.innerHTML = info.htmlBody;
+  whatsnewReleaseUrl = info.releaseUrl;
+  whatsnewViewNotes.hidden = !info.releaseUrl;
+  whatsnewBackdrop.style.display = "flex";
+  requestAnimationFrame(() => whatsnewBackdrop.classList.add("visible"));
+}
+
+function hideWhatsNewModal(): void {
+  whatsnewBackdrop.classList.remove("visible");
+  window.setTimeout(() => {
+    whatsnewBackdrop.style.display = "none";
+    whatsnewBody.innerHTML = "";
+    whatsnewSubtitle.textContent = "";
+    whatsnewReleaseUrl = null;
+    whatsnewViewNotes.hidden = true;
+  }, 150);
+}
+
+function initUpdaterUI(): void {
+  updateBannerInstall.addEventListener("click", () => {
+    currentBannerHandler?.({ type: "install" });
+  });
+  updateBannerLater.addEventListener("click", () => {
+    currentBannerHandler?.({ type: "later" });
+  });
+  updateBannerNotes.addEventListener("click", () => {
+    currentBannerHandler?.({ type: "notes" });
+  });
+
+  whatsnewClose.addEventListener("click", hideWhatsNewModal);
+  whatsnewDone.addEventListener("click", hideWhatsNewModal);
+  whatsnewViewNotes.addEventListener("click", () => {
+    if (whatsnewReleaseUrl) void openUrl(whatsnewReleaseUrl);
+  });
+  whatsnewBackdrop.addEventListener("click", (e) => {
+    if (e.target === whatsnewBackdrop) hideWhatsNewModal();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (
+      e.key === "Escape" &&
+      whatsnewBackdrop.classList.contains("visible")
+    ) {
+      e.preventDefault();
+      hideWhatsNewModal();
+    }
+  });
+
+  prefsAutoUpdate.addEventListener("change", async () => {
+    await savePref(AUTO_CHECK_KEY, prefsAutoUpdate.checked);
+  });
+}
+
+async function syncAutoUpdatePref(): Promise<void> {
+  const store = await load(STORE_FILE);
+  const v = await store.get(AUTO_CHECK_KEY);
+  // Default checked; only flip off when explicitly stored as false.
+  prefsAutoUpdate.checked = v !== false;
+}
+
+async function buildUpdaterDeps(): Promise<UpdaterDeps> {
+  const store = await load(STORE_FILE);
+  return {
+    store,
+    showBanner: showUpdateBanner,
+    hideBanner: hideUpdateBanner,
+  };
+}
+
 async function init(): Promise<void> {
   await initLocale();
   await initTheme();
   initSearch();
   initPreferences();
+  initUpdaterUI();
+  await syncAutoUpdatePref();
   const appWindow = getCurrentWindow();
 
   // Load recents once at startup, validate existence (dim missing entries),
@@ -1953,6 +2115,14 @@ async function init(): Promise<void> {
   });
   appWindow.listen("menu-open-preferences", () => {
     openPrefs();
+  });
+  appWindow.listen("menu-check-updates", async () => {
+    const deps = await buildUpdaterDeps();
+    void manualCheck(deps);
+  });
+  appWindow.listen("menu-whats-new", async () => {
+    const deps = await buildUpdaterDeps();
+    void showManually({ store: deps.store, showModal: showWhatsNewModal });
   });
 
   // Live tree updates from the Rust watcher. Debounced beyond the 200ms
@@ -2354,3 +2524,13 @@ function interceptLinks(currentDir: string[]): void {
 }
 
 init();
+
+// Deferred so the network calls don't slow cold launch.
+window.setTimeout(async () => {
+  const deps = await buildUpdaterDeps();
+  void autoCheckOnStartup(deps);
+  void autoShowAfterUpdate({
+    store: deps.store,
+    showModal: showWhatsNewModal,
+  });
+}, 1500);

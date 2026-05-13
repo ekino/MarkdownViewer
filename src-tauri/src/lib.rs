@@ -460,6 +460,146 @@ async fn export_pdf(_output_path: String) -> Result<(), String> {
     Err("PDF export is only supported on macOS".to_string())
 }
 
+// Server-side downgrade guard. Called from the renderer right before
+// install. The renderer also runs isUpgrade() in TypeScript, but the
+// renderer is reachable via DOMPurify-bypass XSS in theory; the Rust
+// side is not. If a hostile manifest somehow advertised an older
+// version and slipped past every other check, this is the last
+// gate before we hand the update plugin a bullet to fire.
+//
+// The current version is sourced exclusively from the binary's
+// package_info — we deliberately do NOT accept a current_version
+// parameter from the renderer. Taking one would create a footgun
+// (callers passing the renderer-supplied value into the check) and
+// risk reflecting attacker-controlled input back through error
+// messages.
+//
+// Returns Err with a descriptive message instead of Ok(false) so the
+// renderer can't accidentally interpret "failure" as "allowed". The
+// error message does NOT echo the candidate string verbatim — only a
+// fixed, non-attacker-controlled summary.
+#[tauri::command]
+fn assert_update_is_upgrade(
+    app: tauri::AppHandle,
+    candidate_version: String,
+) -> Result<(), String> {
+    let current = app.package_info().version.to_string();
+    if !is_strictly_greater_semver(&current, &candidate_version) {
+        return Err("candidate version is not a strict upgrade".into());
+    }
+    Ok(())
+}
+
+// Strict semver-core comparison. Pre-release / build metadata (after
+// `-` or `+`) is ignored. Every dot-separated segment of the core must
+// be purely numeric; anything else fails closed.
+fn is_strictly_greater_semver(current: &str, candidate: &str) -> bool {
+    fn core(v: &str) -> Option<Vec<u64>> {
+        let stripped = v.strip_prefix('v').unwrap_or(v);
+        let core_only = stripped.split(['-', '+']).next().unwrap_or("");
+        let parts: Vec<&str> = core_only.split('.').collect();
+        if parts.is_empty() {
+            return None;
+        }
+        let mut out = Vec::with_capacity(parts.len());
+        for p in parts {
+            if p.is_empty() || !p.chars().all(|c| c.is_ascii_digit()) {
+                return None;
+            }
+            out.push(p.parse::<u64>().ok()?);
+        }
+        Some(out)
+    }
+    let a = match core(current) {
+        Some(v) => v,
+        None => return false,
+    };
+    let b = match core(candidate) {
+        Some(v) => v,
+        None => return false,
+    };
+    let len = a.len().max(b.len());
+    for i in 0..len {
+        let ai = a.get(i).copied().unwrap_or(0);
+        let bi = b.get(i).copied().unwrap_or(0);
+        if bi > ai {
+            return true;
+        }
+        if bi < ai {
+            return false;
+        }
+    }
+    false
+}
+
+// Fetches the release notes body for a given app version from the GitHub
+// API. Lives on the Rust side so the renderer doesn't need a CSP
+// connect-src exception for api.github.com — keeping the webview's
+// network surface as tight as possible limits the blast radius of any
+// future XSS bypass in DOMPurify.
+//
+// Returns the release notes body + publish date for a given version,
+// or None when the release has no notes / the network call fails / the
+// API returns non-success. The caller sanitizes the body via
+// parseMarkdown + DOMPurify before rendering.
+#[derive(serde::Serialize)]
+pub struct ReleaseInfo {
+    body: String,
+    published_at: Option<String>,
+    html_url: Option<String>,
+}
+
+// Single source of truth for the GitHub coordinates on the Rust side.
+// Must stay in sync with GITHUB_REPO in src/updater.ts and with the
+// updater endpoint in tauri.conf.json. If the project ever moves orgs,
+// these three references must all change together.
+const GITHUB_REPO: &str = "ekino/MarkdownViewer";
+
+#[tauri::command]
+async fn fetch_release_notes(version: String) -> Result<Option<ReleaseInfo>, String> {
+    // Restrict input shape so a hostile caller can't aim the request at
+    // arbitrary paths via path traversal in the tag segment.
+    if version.is_empty() || version.len() > 64 {
+        return Err("invalid version".into());
+    }
+    if !version.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '+') {
+        return Err("invalid version".into());
+    }
+    let url = format!(
+        "https://api.github.com/repos/{GITHUB_REPO}/releases/tags/v{version}"
+    );
+    let client = reqwest::Client::builder()
+        .user_agent("MarkdownViewer/whatsnew")
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let res = client
+        .get(&url)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !res.status().is_success() {
+        return Ok(None);
+    }
+    #[derive(serde::Deserialize)]
+    struct ReleaseResponse {
+        body: Option<String>,
+        published_at: Option<String>,
+        html_url: Option<String>,
+    }
+    let parsed: ReleaseResponse = res.json().await.map_err(|e| e.to_string())?;
+    let body = parsed.body.unwrap_or_default();
+    if body.trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(ReleaseInfo {
+        body,
+        published_at: parsed.published_at,
+        html_url: parsed.html_url,
+    }))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run(path_arg: Option<String>) {
     let app = tauri::Builder::default()
@@ -485,13 +625,17 @@ pub fn run(path_arg: Option<String>) {
             list_disk_themes,
             save_disk_theme,
             delete_disk_theme,
-            reveal_themes_dir
+            reveal_themes_dir,
+            fetch_release_notes,
+            assert_update_is_upgrade
         ])
         .manage(watcher::WatcherRegistry::default())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(move |app| {
             let menu = menu::build_menu(app)?;
             app.set_menu(menu)?;
@@ -550,6 +694,12 @@ pub fn run(path_arg: Option<String>) {
                     }
                     menu::MenuEvent::Preferences => {
                         let _ = app_handle.emit("menu-open-preferences", ());
+                    }
+                    menu::MenuEvent::CheckUpdates => {
+                        let _ = app_handle.emit("menu-check-updates", ());
+                    }
+                    menu::MenuEvent::WhatsNew => {
+                        let _ = app_handle.emit("menu-whats-new", ());
                     }
                     menu::MenuEvent::Unknown => {}
                 }
@@ -676,5 +826,47 @@ mod tests {
         assert!(!path_is_under_current_root(Path::new("/c")));
         *current_root_slot().lock().unwrap() = None;
         assert!(!path_is_under_current_root(Path::new("/a/b/c.md")));
+    }
+
+    #[test]
+    fn semver_strict_greater_basic() {
+        assert!(is_strictly_greater_semver("0.9.0", "0.10.0"));
+        assert!(is_strictly_greater_semver("0.9.0", "1.0.0"));
+        assert!(is_strictly_greater_semver("1.2.3", "1.2.4"));
+        assert!(!is_strictly_greater_semver("0.9.0", "0.9.0"));
+        assert!(!is_strictly_greater_semver("1.0.0", "0.9.9"));
+    }
+
+    #[test]
+    fn semver_strict_greater_strips_v_prefix() {
+        assert!(is_strictly_greater_semver("v0.9.0", "v0.10.0"));
+        assert!(is_strictly_greater_semver("0.9.0", "v0.10.0"));
+    }
+
+    #[test]
+    fn semver_strict_greater_ignores_prerelease() {
+        // Same core version with a -rc suffix is NOT an upgrade.
+        assert!(!is_strictly_greater_semver("1.0.0", "1.0.0-rc1"));
+        // But a strictly greater core IS, regardless of suffix.
+        assert!(is_strictly_greater_semver("0.9.0", "1.0.0-beta"));
+    }
+
+    #[test]
+    fn semver_strict_greater_rejects_garbage() {
+        // Hostile manifest with non-numeric segments must NOT parse as
+        // a huge version. The whole point of the Rust-side guard.
+        assert!(!is_strictly_greater_semver("0.9.0", "99.attacker.0"));
+        assert!(!is_strictly_greater_semver("0.9.0", "garbage"));
+        assert!(!is_strictly_greater_semver("0.9.0", ""));
+        assert!(!is_strictly_greater_semver("0.9.0", "1.0.0a"));
+        assert!(!is_strictly_greater_semver("0.9.0", "..."));
+        // Garbage on the installed-version side also fails closed.
+        assert!(!is_strictly_greater_semver("garbage", "1.0.0"));
+    }
+
+    #[test]
+    fn semver_strict_greater_handles_multidigit() {
+        assert!(is_strictly_greater_semver("1.9.0", "1.10.0"));
+        assert!(is_strictly_greater_semver("0.99.0", "0.100.0"));
     }
 }

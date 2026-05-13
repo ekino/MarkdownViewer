@@ -31,6 +31,8 @@ pub const ID_EXPORT_MD: &str = "export_md";
 pub const ID_SHARE: &str = "share";
 pub const ID_PRINT: &str = "print";
 pub const ID_PREFERENCES: &str = "preferences";
+pub const ID_CHECK_UPDATES: &str = "check_updates";
+pub const ID_WHATS_NEW: &str = "whats_new";
 
 pub fn build_menu(app: &tauri::App) -> tauri::Result<Menu<Wry>> {
     build_menu_inner(app.app_handle(), &[], false, false)
@@ -63,6 +65,12 @@ fn build_menu_inner<M: tauri::Manager<Wry>>(
 
     let preferences = MenuItemBuilder::with_id(ID_PREFERENCES, "Preferences…")
         .accelerator("CmdOrCtrl+,")
+        .build(app_handle)?;
+
+    let check_updates = MenuItemBuilder::with_id(ID_CHECK_UPDATES, "Check for Updates…")
+        .build(app_handle)?;
+
+    let whats_new = MenuItemBuilder::with_id(ID_WHATS_NEW, "What's New…")
         .build(app_handle)?;
 
     // Save replays the last export the user did on this file; falls back
@@ -146,6 +154,8 @@ fn build_menu_inner<M: tauri::Manager<Wry>>(
             &SubmenuBuilder::new(app_handle, &app_name)
                 .about(None)
                 .separator()
+                .items(&[&check_updates, &whats_new])
+                .separator()
                 .items(&[&preferences])
                 .separator()
                 .services()
@@ -192,6 +202,8 @@ pub enum MenuEvent {
     Share,
     Print,
     Preferences,
+    CheckUpdates,
+    WhatsNew,
     Unknown,
 }
 
@@ -209,6 +221,8 @@ pub fn classify_event(id: &str) -> MenuEvent {
         ID_SHARE => MenuEvent::Share,
         ID_PRINT => MenuEvent::Print,
         ID_PREFERENCES => MenuEvent::Preferences,
+        ID_CHECK_UPDATES => MenuEvent::CheckUpdates,
+        ID_WHATS_NEW => MenuEvent::WhatsNew,
         s if s.starts_with(ID_OPEN_RECENT_PREFIX) => s[ID_OPEN_RECENT_PREFIX.len()..]
             .parse::<usize>()
             .map(MenuEvent::OpenRecent)
