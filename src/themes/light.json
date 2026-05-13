@@ -1,0 +1,22 @@
+{
+  "id": "light",
+  "name": "Light",
+  "isDark": false,
+  "pair": "dark",
+  "vars": {
+    "--bg": "#fafafa",
+    "--sidebar-bg": "#f0f0f0",
+    "--sidebar-hover": "#e2e2e2",
+    "--sidebar-active": "#d4d4d4",
+    "--border": "#ddd",
+    "--text": "#1a1a1a",
+    "--text-muted": "#666",
+    "--accent": "#2563eb",
+    "--accent-light": "#eff6ff",
+    "--code-bg": "#f4f4f5",
+    "--table-border": "#e5e5e5",
+    "--table-stripe": "#fafafa",
+    "--search-hit": "#fff3a3",
+    "--search-hit-active": "#ffd54a"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "id": "sepia",
+  "name": "Sepia",
+  "isDark": false,
+  "pair": "dark",
+  "vars": {
+    "--bg": "#f4ecd8",
+    "--sidebar-bg": "#ede4cd",
+    "--sidebar-hover": "#e3d8b8",
+    "--sidebar-active": "#d8caa1",
+    "--border": "#d8caa1",
+    "--text": "#5b4636",
+    "--text-muted": "#8b7355",
+    "--accent": "#a0522d",
+    "--accent-light": "#ede4cd",
+    "--code-bg": "#ede4cd",
+    "--table-border": "#d8caa1",
+    "--table-stripe": "#efe5cb",
+    "--search-hit": "#f5d77a",
+    "--search-hit-active": "#d4a017"
+  }
+}

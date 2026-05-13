@@ -1,3 +1,5 @@
+import { t } from "./i18n";
+
 export function addCopyButtons(container: HTMLElement): void {
   for (const pre of container.querySelectorAll("pre")) {
     if (!pre.querySelector("code")) continue;
@@ -6,15 +8,15 @@ export function addCopyButtons(container: HTMLElement): void {
     (pre as HTMLElement).style.position = "relative";
     const btn = document.createElement("button");
     btn.className = "copy-btn";
-    btn.textContent = "Copy";
+    btn.textContent = t("code.copy");
     btn.addEventListener("click", () => {
       const code = pre.querySelector("code");
       if (!code) return;
       navigator.clipboard.writeText(code.textContent ?? "").then(() => {
-        btn.textContent = "Copied!";
+        btn.textContent = t("code.copied");
         btn.classList.add("copied");
         setTimeout(() => {
-          btn.textContent = "Copy";
+          btn.textContent = t("code.copy");
           btn.classList.remove("copied");
         }, 2000);
       });
