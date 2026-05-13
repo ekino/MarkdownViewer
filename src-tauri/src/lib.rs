@@ -1,6 +1,9 @@
+mod fs_tree;
+mod menu;
+mod watcher;
+
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
-use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::{Emitter, Manager};
 
 #[derive(Clone, serde::Serialize)]
@@ -27,6 +30,87 @@ fn get_pending_open() -> Option<PendingOpen> {
 #[tauri::command]
 fn print_webview(webview: tauri::Webview) -> Result<(), String> {
     webview.print().map_err(|e| e.to_string())
+}
+
+// Renderer-shaped payload for menu-open-recent so the JS side doesn't have
+// to re-resolve the index back to the recents store.
+#[derive(Clone, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum RecentEventPayload {
+    File { path: String },
+    Folder { path: String },
+}
+
+// Currently-displayed recents shadow copy. The menu is rebuilt on every
+// update_menu_recents call, so we keep the items here to translate index
+// → (kind, path) when the user clicks an "Open Recent" entry without
+// round-tripping back to the renderer.
+static MENU_RECENTS: OnceLock<Mutex<Vec<menu::RecentMenuItem>>> = OnceLock::new();
+
+fn menu_recents_slot() -> &'static Mutex<Vec<menu::RecentMenuItem>> {
+    MENU_RECENTS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+#[tauri::command]
+fn update_menu_state(
+    app: tauri::AppHandle,
+    items: Vec<menu::RecentMenuItem>,
+    folder_open: bool,
+) -> Result<(), String> {
+    let menu = menu::rebuild(&app, &items, folder_open).map_err(|e| e.to_string())?;
+    app.set_menu(menu).map_err(|e| e.to_string())?;
+    if let Ok(mut slot) = menu_recents_slot().lock() {
+        *slot = items;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn reveal_in_finder(path: String) -> Result<(), String> {
+    use tauri_plugin_opener::reveal_item_in_dir;
+    if path.is_empty() || path.len() > 4096 {
+        return Err("invalid path".into());
+    }
+    reveal_item_in_dir(path).map_err(|e| e.to_string())
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+enum PathValidationKind {
+    File,
+    Dir,
+    Missing,
+}
+
+#[derive(serde::Serialize)]
+struct PathValidation {
+    exists: bool,
+    kind: PathValidationKind,
+}
+
+// Used by the renderer to mark recents entries whose target no longer
+// exists (moved/deleted). Returns a parallel array so the caller can
+// zip results without re-sending the path list. Symlinks are followed
+// via fs::metadata; broken symlinks report as Missing.
+#[tauri::command]
+fn validate_paths(paths: Vec<String>) -> Vec<PathValidation> {
+    paths
+        .into_iter()
+        .map(|p| match std::fs::metadata(&p) {
+            Ok(meta) if meta.is_file() => PathValidation {
+                exists: true,
+                kind: PathValidationKind::File,
+            },
+            Ok(meta) if meta.is_dir() => PathValidation {
+                exists: true,
+                kind: PathValidationKind::Dir,
+            },
+            _ => PathValidation {
+                exists: false,
+                kind: PathValidationKind::Missing,
+            },
+        })
+        .collect()
 }
 
 fn themes_dir_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
@@ -212,6 +296,12 @@ pub fn run(path_arg: Option<String>) {
             print_webview,
             export_pdf,
             get_pending_open,
+            validate_paths,
+            update_menu_state,
+            reveal_in_finder,
+            fs_tree::scan_markdown_tree,
+            watcher::start_watch,
+            watcher::stop_watch,
             list_system_fonts,
             themes_dir,
             list_disk_themes,
@@ -219,57 +309,53 @@ pub fn run(path_arg: Option<String>) {
             delete_disk_theme,
             reveal_themes_dir
         ])
+        .manage(watcher::WatcherRegistry::default())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
-            // Build native menu
-            let open_folder = MenuItemBuilder::with_id("open_folder", "Open Folder…")
-                .accelerator("CmdOrCtrl+O")
-                .build(app)?;
-
-            let preferences = MenuItemBuilder::with_id("preferences", "Preferences…")
-                .accelerator("CmdOrCtrl+,")
-                .build(app)?;
-
-            let app_name = app.package_info().name.clone();
-
-            let menu = MenuBuilder::new(app)
-                .items(&[
-                    &SubmenuBuilder::new(app, &app_name)
-                        .about(None)
-                        .separator()
-                        .items(&[&preferences])
-                        .separator()
-                        .services()
-                        .separator()
-                        .hide()
-                        .hide_others()
-                        .show_all()
-                        .separator()
-                        .quit()
-                        .build()?,
-                    &SubmenuBuilder::new(app, "File")
-                        .items(&[&open_folder])
-                        .separator()
-                        .close_window()
-                        .build()?,
-                ])
-                .build()?;
-
+            let menu = menu::build_menu(app)?;
             app.set_menu(menu)?;
 
             let app_handle = app.handle().clone();
             app.on_menu_event(move |_app, event| {
-                match event.id().0.as_str() {
-                    "open_folder" => {
+                match menu::classify_event(event.id().0.as_str()) {
+                    menu::MenuEvent::OpenFile => {
+                        let _ = app_handle.emit("menu-open-file", ());
+                    }
+                    menu::MenuEvent::OpenFolder => {
                         let _ = app_handle.emit("menu-open-folder", ());
                     }
-                    "preferences" => {
+                    menu::MenuEvent::OpenRecent(idx) => {
+                        // Translate the click into a (kind, path) payload so
+                        // the renderer can act without re-fetching the store.
+                        let payload = menu_recents_slot()
+                            .lock()
+                            .ok()
+                            .and_then(|slot| slot.get(idx).cloned())
+                            .and_then(|item| match item.kind.as_str() {
+                                "file" => Some(RecentEventPayload::File { path: item.path }),
+                                "folder" => Some(RecentEventPayload::Folder { path: item.path }),
+                                _ => None,
+                            });
+                        if let Some(p) = payload {
+                            let _ = app_handle.emit("menu-open-recent", p);
+                        }
+                    }
+                    menu::MenuEvent::ClearRecents => {
+                        let _ = app_handle.emit("menu-clear-recents", ());
+                    }
+                    menu::MenuEvent::CloseFolder => {
+                        let _ = app_handle.emit("menu-close-folder", ());
+                    }
+                    menu::MenuEvent::Print => {
+                        let _ = app_handle.emit("menu-print", ());
+                    }
+                    menu::MenuEvent::Preferences => {
                         let _ = app_handle.emit("menu-open-preferences", ());
                     }
-                    _ => {}
+                    menu::MenuEvent::Unknown => {}
                 }
             });
 
@@ -303,6 +389,16 @@ pub fn run(path_arg: Option<String>) {
         .expect("error while building tauri application");
 
     app.run(|app_handle, event| {
+        // Drop watchers when their window closes so the OS-level watch
+        // is released and we don't keep the renderer payload channel alive.
+        if let tauri::RunEvent::WindowEvent {
+            ref label,
+            event: tauri::WindowEvent::CloseRequested { .. },
+            ..
+        } = event
+        {
+            watcher::drop_watcher_for_window(app_handle, label);
+        }
         #[cfg(target_os = "macos")]
         if let tauri::RunEvent::Opened { ref urls } = event {
             for url in urls {

@@ -1,3 +1,4 @@
+import DOMPurify from "dompurify";
 import mermaid from "mermaid";
 import "katex/dist/katex.min.css";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -21,6 +22,21 @@ import {
   type Locale,
 } from "./i18n";
 import { parseMarkdown } from "./markdown";
+import {
+  loadRecents as loadRecentsFromStore,
+  pushRecent,
+  saveRecents,
+  type RecentEntry,
+} from "./recents";
+import { loadSession, saveSession } from "./session";
+import { SidebarTree, type ScanResult } from "./sidebar-tree";
+import { showToast } from "./toast";
+import {
+  renderRecentsList,
+  showContextMenu,
+  updateWelcomeVisibility,
+  type RecentDisplayEntry,
+} from "./welcome";
 import {
   APPEARANCE_KEY,
   BODY_FONT_KEY,
@@ -112,6 +128,18 @@ function activeThemeId(): ThemeId {
   );
 }
 
+// Pass every mermaid-produced SVG through DOMPurify before it lands in
+// the live DOM. Mermaid 10/11 with securityLevel:"strict" already drops
+// most XSS vectors, but historical CVEs (e.g. CVE-2021-23648) prove the
+// SVG output is not a trust boundary on its own. Allowing the standard
+// SVG profile keeps gradients, animations, and foreign-object text that
+// real diagrams need.
+function sanitizeMermaidSvg(svg: string): string {
+  return DOMPurify.sanitize(svg, {
+    USE_PROFILES: { svg: true, svgFilters: true },
+  }) as unknown as string;
+}
+
 function applyActiveTheme(): void {
   const id = activeThemeId();
   applyThemeToDOM(themeCatalog, document.documentElement, id);
@@ -120,7 +148,11 @@ function applyActiveTheme(): void {
   mermaid.initialize({
     startOnLoad: false,
     theme: dark ? "dark" : "default",
-    securityLevel: "loose",
+    // `strict` blocks user-supplied click handlers and HTML labels inside
+    // mermaid blocks. We additionally sanitize the rendered SVG below as
+    // defense-in-depth, since past mermaid releases have shipped XSS
+    // bugs even at this level.
+    securityLevel: "strict",
     fontFamily:
       '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
   });
@@ -261,7 +293,7 @@ async function renderMermaidDiagrams(): Promise<void> {
 
       const preview = document.createElement("div");
       preview.className = "mermaid-preview";
-      preview.innerHTML = svg;
+      preview.innerHTML = sanitizeMermaidSvg(svg);
 
       wrapper.appendChild(btn);
       wrapper.appendChild(preview);
@@ -358,7 +390,7 @@ function openMermaidFullscreen(svgContent: string, title: string): void {
 
   const body = document.createElement("div");
   body.className = "mermaid-overlay-body";
-  body.innerHTML = svgContent;
+  body.innerHTML = sanitizeMermaidSvg(svgContent);
 
   const svg = body.querySelector("svg");
   if (svg) {
@@ -393,8 +425,20 @@ const markdownEl = document.getElementById("markdown") as HTMLDivElement;
 const emptyState = document.getElementById("empty-state") as HTMLDivElement;
 const contentEl = document.getElementById("content") as HTMLDivElement;
 const openBtn = document.getElementById("open-btn") as HTMLButtonElement;
+const openFileBtn = document.getElementById(
+  "open-file-btn"
+) as HTMLButtonElement;
 const examplesBtn = document.getElementById(
   "examples-btn"
+) as HTMLButtonElement;
+const welcomeRecentsWrap = document.getElementById(
+  "welcome-recents"
+) as HTMLDivElement;
+const welcomeRecentsList = document.getElementById(
+  "welcome-recents-list"
+) as HTMLUListElement;
+const welcomeRecentsClear = document.getElementById(
+  "welcome-recents-clear"
 ) as HTMLButtonElement;
 const outlineEl = document.getElementById("outline") as HTMLDivElement;
 const outlineNav = document.getElementById("outline-nav") as HTMLElement;
@@ -429,26 +473,73 @@ let currentPath: string[] = [];
 let activeFile: string | null = null;
 let scrollObserver: IntersectionObserver | null = null;
 
+const sidebarTree = new SidebarTree(fileList, {
+  onOpenFile: (absPath) => {
+    // newTab will become meaningful when the TabManager lands in PR 4.
+    void openFileFromAbsolutePath(absPath);
+  },
+  onReveal: (absPath) => revealInFinder(absPath),
+  onRevealDir: (absPath) => revealInFinder(absPath),
+});
+
+async function refreshSidebarTree(autoExpandRoot = true): Promise<void> {
+  if (!rootPath) {
+    sidebarTree.clear();
+    return;
+  }
+  try {
+    const result = await invoke<ScanResult>("scan_markdown_tree", {
+      root: rootPath,
+    });
+    sidebarTree.setTree(result, autoExpandRoot);
+    sidebarTree.setActive(absoluteActiveFile());
+  } catch (e) {
+    console.warn("scan_markdown_tree failed:", e);
+  }
+}
+
+function absoluteActiveFile(): string | null {
+  if (!rootPath || !activeFile) return null;
+  return `${rootPath}/${activeFile}`;
+}
+
+async function openFileFromAbsolutePath(absPath: string): Promise<void> {
+  if (!rootPath || !absPath.startsWith(rootPath + "/")) {
+    // The file sits outside the current root — fall back to "open as
+    // standalone file" which resets root to the file's parent dir.
+    await openFileFromPath(absPath);
+    return;
+  }
+  const relative = absPath.slice(rootPath.length + 1);
+  await loadFile(relative);
+}
+
 const STORE_FILE = "settings.json";
-const STORE_KEY = "lastFolder";
 
 // --- Store persistence ---
+//
+// Folder persistence lives under the session blob (see src/session.ts).
+// We still read the legacy `lastFolder` key on first load so users
+// upgrading from pre-session builds don't lose their working directory.
 
 async function saveRootPath(path: string): Promise<void> {
   const store = await load(STORE_FILE);
-  await store.set(STORE_KEY, path);
-  await store.save();
+  const current = await loadSession(store);
+  await saveSession(store, { ...current, folder: path });
 }
 
 async function loadRootPath(): Promise<string | null> {
   const store = await load(STORE_FILE);
-  return ((await store.get(STORE_KEY)) as string) ?? null;
+  const session = await loadSession(store);
+  return session.folder;
 }
 
 // --- Init ---
 
 openBtn.addEventListener("click", openFolder);
+openFileBtn.addEventListener("click", openFile);
 examplesBtn.addEventListener("click", openExamples);
+welcomeRecentsClear.addEventListener("click", clearRecentsFromUI);
 
 async function openExamples(): Promise<void> {
   const examplesPath = await resolveResource("examples");
@@ -459,11 +550,154 @@ type PendingOpen =
   | { kind: "file"; path: string }
   | { kind: "folder"; path: string };
 
+function basename(p: string): string {
+  const lastSep = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+  return lastSep >= 0 ? p.slice(lastSep + 1) : p;
+}
+
 async function openFileFromPath(filePath: string): Promise<void> {
   const lastSep = filePath.lastIndexOf("/");
   const parentDir = filePath.substring(0, lastSep);
   const fileName = filePath.substring(lastSep + 1);
   await setRootPath(parentDir, fileName);
+  await pushToRecents({ kind: "file", path: filePath, displayName: fileName });
+}
+
+async function openFile(): Promise<void> {
+  const selected = await open({
+    multiple: false,
+    filters: [
+      { name: "Markdown", extensions: ["md", "markdown", "mdx"] },
+    ],
+  });
+  if (typeof selected === "string") {
+    await openFileFromPath(selected);
+  }
+}
+
+// --- Recents ---
+//
+// In-memory mirror of the persisted list. We keep it here so the welcome
+// screen can re-render synchronously after every push/clear, and so the
+// native menu rebuild has a single source of truth.
+let recentsCache: RecentEntry[] = [];
+let recentsMissing: Set<string> = new Set();
+
+function recentKey(r: { kind: string; path: string }): string {
+  return `${r.kind}:${r.path}`;
+}
+
+async function pushToRecents(
+  entry: Omit<RecentEntry, "lastOpenedAt"> & { lastOpenedAt?: number },
+): Promise<void> {
+  const full: RecentEntry = {
+    ...entry,
+    lastOpenedAt: entry.lastOpenedAt ?? Date.now(),
+  };
+  recentsCache = pushRecent(recentsCache, full);
+  // A freshly opened item exists by definition — clear any stale "missing".
+  recentsMissing.delete(recentKey(full));
+  await persistAndRefreshRecents();
+}
+
+async function persistAndRefreshRecents(): Promise<void> {
+  const store = await load(STORE_FILE);
+  await saveRecents(store, recentsCache);
+  renderWelcomeRecents();
+  await pushRecentsToNativeMenu();
+}
+
+async function pushRecentsToNativeMenu(): Promise<void> {
+  const items = recentsCache.map((r) => ({
+    kind: r.kind,
+    path: r.path,
+    label: r.displayName,
+    enabled: !recentsMissing.has(recentKey(r)),
+  }));
+  try {
+    await invoke("update_menu_state", {
+      items,
+      folderOpen: rootPath !== null,
+    });
+  } catch (e) {
+    console.warn("Failed to update menu state:", e);
+  }
+}
+
+function renderWelcomeRecents(): void {
+  const entries: RecentDisplayEntry[] = recentsCache.map((r) => ({
+    ...r,
+    missing: recentsMissing.has(recentKey(r)),
+  }));
+  updateWelcomeVisibility(welcomeRecentsWrap, entries.length > 0);
+  renderRecentsList(welcomeRecentsList, entries, {
+    onOpenRecent: (entry) => openRecentEntry(entry),
+    onReveal: (entry) => revealInFinder(entry.path),
+    onRemove: (entry) => removeRecent(entry),
+    onClear: () => clearRecentsFromUI(),
+  });
+}
+
+async function openRecentEntry(entry: RecentEntry): Promise<void> {
+  if (recentsMissing.has(recentKey(entry))) {
+    showToast(t("toast.recent.missing"), "error");
+    await removeRecent(entry);
+    return;
+  }
+  if (entry.kind === "file") {
+    await openFileFromPath(entry.path);
+  } else {
+    await setRootPath(entry.path);
+    await pushToRecents({
+      kind: "folder",
+      path: entry.path,
+      displayName: entry.displayName,
+    });
+  }
+}
+
+async function removeRecent(entry: RecentEntry): Promise<void> {
+  const key = recentKey(entry);
+  recentsCache = recentsCache.filter((r) => recentKey(r) !== key);
+  recentsMissing.delete(key);
+  await persistAndRefreshRecents();
+}
+
+async function clearRecentsFromUI(): Promise<void> {
+  recentsCache = [];
+  recentsMissing.clear();
+  await persistAndRefreshRecents();
+}
+
+async function revealInFinder(path: string): Promise<void> {
+  try {
+    await invoke("reveal_in_finder", { path });
+  } catch (e) {
+    console.warn("reveal_in_finder failed:", e);
+  }
+}
+
+async function validateRecentsAndRefresh(): Promise<void> {
+  if (recentsCache.length === 0) {
+    renderWelcomeRecents();
+    return;
+  }
+  try {
+    const results = await invoke<Array<{ exists: boolean; kind: string }>>(
+      "validate_paths",
+      { paths: recentsCache.map((r) => r.path) },
+    );
+    recentsMissing = new Set();
+    recentsCache.forEach((r, i) => {
+      if (!results[i]?.exists) {
+        recentsMissing.add(recentKey(r));
+      }
+    });
+  } catch (e) {
+    console.warn("validate_paths failed:", e);
+  }
+  renderWelcomeRecents();
+  await pushRecentsToNativeMenu();
 }
 
 // --- Search ---
@@ -1401,9 +1635,20 @@ async function init(): Promise<void> {
   initPreferences();
   const appWindow = getCurrentWindow();
 
+  // Load recents once at startup, validate existence (dim missing entries),
+  // and prime both the welcome list and the native Open Recent submenu.
+  const store = await load(STORE_FILE);
+  recentsCache = await loadRecentsFromStore(store);
+  await validateRecentsAndRefresh();
+
   // Runtime opens (hot-start file association, "Open With", CLI events)
-  appWindow.listen<string>("open-folder", (event) => {
-    setRootPath(event.payload);
+  appWindow.listen<string>("open-folder", async (event) => {
+    await setRootPath(event.payload);
+    await pushToRecents({
+      kind: "folder",
+      path: event.payload,
+      displayName: extractRootName(event.payload),
+    });
   });
   appWindow.listen<string>("open-file", (event) => {
     openFileFromPath(event.payload);
@@ -1411,8 +1656,87 @@ async function init(): Promise<void> {
   appWindow.listen("menu-open-folder", () => {
     openFolder();
   });
+  appWindow.listen("menu-open-file", () => {
+    openFile();
+  });
+  appWindow.listen<{ kind: "file" | "folder"; path: string }>(
+    "menu-open-recent",
+    async (event) => {
+      const { kind, path } = event.payload;
+      const cached = recentsCache.find(
+        (r) => r.kind === kind && r.path === path,
+      );
+      const entry: RecentEntry = cached ?? {
+        kind,
+        path,
+        displayName: basename(path),
+        lastOpenedAt: Date.now(),
+      };
+      await openRecentEntry(entry);
+    },
+  );
+  appWindow.listen("menu-clear-recents", () => {
+    clearRecentsFromUI();
+  });
+  appWindow.listen("menu-close-folder", () => {
+    closeFolder();
+  });
+  appWindow.listen("menu-print", () => {
+    invoke("print_webview");
+  });
   appWindow.listen("menu-open-preferences", () => {
     openPrefs();
+  });
+
+  // Live tree updates from the Rust watcher. Debounced beyond the 200ms
+  // backend debounce so a slow filesystem (cloud, network) doesn't keep
+  // re-scanning while events trickle in.
+  let rescanTimer: number | null = null;
+  appWindow.listen("fs-change", () => {
+    if (rescanTimer !== null) window.clearTimeout(rescanTimer);
+    rescanTimer = window.setTimeout(() => {
+      rescanTimer = null;
+      // autoExpandRoot=false so the user's expansion state survives.
+      void refreshSidebarTree(false);
+    }, 150);
+  });
+
+  // Drag & drop: accept .md/.markdown/.mdx files and directories.
+  appWindow.onDragDropEvent(async (event) => {
+    if (event.payload.type !== "drop") return;
+    const paths = (event.payload as { type: "drop"; paths: string[] }).paths;
+    for (const p of paths) {
+      const lower = p.toLowerCase();
+      const isMarkdown =
+        lower.endsWith(".md") ||
+        lower.endsWith(".markdown") ||
+        lower.endsWith(".mdx");
+      try {
+        const [valid] = await invoke<
+          Array<{ exists: boolean; kind: string }>
+        >("validate_paths", { paths: [p] });
+        if (!valid?.exists) {
+          showToast(t("toast.dnd.rejected"), "error");
+          continue;
+        }
+        if (valid.kind === "dir") {
+          await setRootPath(p);
+          await pushToRecents({
+            kind: "folder",
+            path: p,
+            displayName: extractRootName(p),
+          });
+          return;
+        }
+        if (valid.kind === "file" && isMarkdown) {
+          await openFileFromPath(p);
+          return;
+        }
+        showToast(t("toast.dnd.rejected"), "error");
+      } catch (e) {
+        console.warn("DnD validation failed:", e);
+      }
+    }
   });
 
   // Cold-start: pull anything the backend buffered (CLI arg or RunEvent::Opened
@@ -1446,12 +1770,55 @@ async function setRootPath(path: string, fileToOpen?: string): Promise<void> {
   } else {
     await autoSelectReadme();
   }
+  // Keep the native Close Folder item in sync with the open state.
+  await pushRecentsToNativeMenu();
+  // Replace any existing watcher for this window. start_watch is
+  // idempotent in the sense that the Rust side drops the previous one
+  // before installing a new watch, so switching folders is safe.
+  try {
+    await invoke("start_watch", { root: path });
+  } catch (e) {
+    console.warn("start_watch failed:", e);
+  }
+}
+
+async function closeFolder(): Promise<void> {
+  rootPath = null;
+  rootName = "";
+  currentPath = [];
+  activeFile = null;
+  sidebarTree.clear();
+  breadcrumb.innerHTML = "";
+  markdownEl.innerHTML = "";
+  markdownEl.style.display = "none";
+  emptyState.style.display = "block";
+  contentEl.classList.add("empty");
+  titlebarFilename.textContent = "";
+  outlineNav.innerHTML = "";
+  outlineEl.style.display = "none";
+  setSearchEnabled(false);
+  // Persist: clear session.folder so a fresh launch lands on the welcome
+  // screen rather than reopening this closed folder.
+  const store = await load(STORE_FILE);
+  const current = await loadSession(store);
+  await saveSession(store, { ...current, folder: null });
+  await pushRecentsToNativeMenu();
+  try {
+    await invoke("stop_watch");
+  } catch (e) {
+    console.warn("stop_watch failed:", e);
+  }
 }
 
 async function openFolder(): Promise<void> {
   const selected = await open({ directory: true, multiple: false });
   if (selected) {
     await setRootPath(selected);
+    await pushToRecents({
+      kind: "folder",
+      path: selected,
+      displayName: extractRootName(selected),
+    });
   }
 }
 
@@ -1463,12 +1830,13 @@ async function listEntries(dirPath: string): Promise<Entry[]> {
 }
 
 // --- Sidebar ---
-
-async function renderSidebar(): Promise<void> {
-  const dirPath = getFullPath(rootPath!, currentPath);
-  const entries = await listEntries(dirPath);
-  fileList.innerHTML = "";
-
+//
+// The flat single-folder list + breadcrumb used to live here. PR 3 swapped
+// it for a recursive markdown-only tree (sidebar-tree.ts). `renderSidebar`
+// is kept as the call-site entry point so existing callers don't need to
+// know about the tree; it now just delegates to the SidebarTree instance
+// and keeps the empty-state side effects centralized here.
+async function renderSidebar(autoExpandRoot = true): Promise<void> {
   emptyState.style.display = "none";
   markdownEl.style.display = activeFile ? "block" : "none";
   if (!activeFile) {
@@ -1477,82 +1845,8 @@ async function renderSidebar(): Promise<void> {
     titlebarFilename.textContent = "";
     setSearchEnabled(false);
   }
-
-  if (currentPath.length > 0) {
-    const back = document.createElement("div");
-    back.className = "file-item";
-    const backIcon = document.createElement("span");
-    backIcon.className = "icon";
-    backIcon.textContent = "..";
-    const backName = document.createElement("span");
-    backName.className = "name";
-    backName.textContent = t("sidebar.parent");
-    back.append(backIcon, backName);
-    back.addEventListener("click", () => {
-      currentPath.pop();
-      renderSidebar();
-    });
-    fileList.appendChild(back);
-  }
-
-  for (const entry of entries) {
-    const item = document.createElement("div");
-    item.className = "file-item";
-    const icon = entry.kind === "directory" ? "\u{1F4C1}" : "\u{1F4C4}";
-    item.innerHTML = `<span class="icon">${icon}</span><span class="name">${entry.name}</span>`;
-
-    if (entry.kind === "directory") {
-      item.addEventListener("click", () => {
-        currentPath.push(entry.name);
-        renderSidebar();
-      });
-    } else {
-      const filePath = [...currentPath, entry.name].join("/");
-      if (filePath === activeFile) item.classList.add("active");
-      item.addEventListener("click", () => loadFile(filePath));
-    }
-    fileList.appendChild(item);
-  }
-  renderBreadcrumb();
-}
-
-function renderBreadcrumb(): void {
   breadcrumb.innerHTML = "";
-
-  const changeBtn = document.createElement("span");
-  changeBtn.textContent = "\u21C4";
-  changeBtn.title = t("breadcrumb.change");
-  changeBtn.style.cssText =
-    "cursor:pointer;font-size:14px;margin-right:4px;opacity:0.6;";
-  changeBtn.addEventListener("click", openFolder);
-  breadcrumb.appendChild(changeBtn);
-
-  const root = document.createElement("span");
-  root.textContent = rootName;
-  if (currentPath.length > 0) {
-    root.addEventListener("click", () => {
-      currentPath = [];
-      renderSidebar();
-    });
-  } else {
-    root.classList.add("current");
-  }
-  breadcrumb.appendChild(root);
-
-  currentPath.forEach((part, i) => {
-    breadcrumb.appendChild(document.createTextNode(" / "));
-    const span = document.createElement("span");
-    span.textContent = part;
-    if (i < currentPath.length - 1) {
-      span.addEventListener("click", () => {
-        currentPath = currentPath.slice(0, i + 1);
-        renderSidebar();
-      });
-    } else {
-      span.classList.add("current");
-    }
-    breadcrumb.appendChild(span);
-  });
+  await refreshSidebarTree(autoExpandRoot);
 }
 
 // --- File loading ---
@@ -1606,12 +1900,11 @@ async function loadFile(filePath: string): Promise<void> {
     const fileDir = filePath.split("/").slice(0, -1);
     if (fileDir.join("/") !== currentPath.join("/")) {
       currentPath = fileDir;
-      await renderSidebar();
     }
 
     const currentDir = filePath.split("/").slice(0, -1);
     interceptLinks(currentDir);
-    highlightSidebar();
+    sidebarTree.setActive(absoluteActiveFile());
     buildOutline();
 
     titlebarFilename.textContent = filePath.split("/").pop() ?? "";
@@ -1714,22 +2007,6 @@ function interceptLinks(currentDir: string[]): void {
           }
         });
       });
-    }
-  }
-}
-
-function highlightSidebar(): void {
-  for (const item of fileList.querySelectorAll(".file-item")) {
-    item.classList.remove("active");
-  }
-  if (!activeFile) return;
-  const activeName = activeFile.split("/").pop();
-  const activeDir = activeFile.split("/").slice(0, -1).join("/");
-  if (activeDir === currentPath.join("/")) {
-    for (const item of fileList.querySelectorAll(".file-item")) {
-      if (item.querySelector(".name")?.textContent === activeName) {
-        item.classList.add("active");
-      }
     }
   }
 }

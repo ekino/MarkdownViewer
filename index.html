@@ -980,6 +980,56 @@
       white-space: nowrap;
     }
 
+    /* Sidebar tree (PR 3) — matches .file-item density */
+    .tree-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      color: var(--text);
+      transition: background 0.1s;
+      user-select: none;
+      white-space: nowrap;
+    }
+    .tree-row:hover {
+      background: var(--sidebar-hover);
+    }
+    .tree-row.active {
+      background: var(--sidebar-active);
+      font-weight: 600;
+    }
+    .tree-row .chevron {
+      font-size: 10px;
+      width: 12px;
+      color: var(--text-muted);
+      flex-shrink: 0;
+      text-align: center;
+    }
+    .tree-row.file .chevron {
+      visibility: hidden; /* keeps file rows aligned with dir rows */
+    }
+    .tree-row .icon {
+      font-size: 15px;
+      width: 20px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+    .tree-row .name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .sidebar-empty,
+    .sidebar-truncated {
+      padding: 12px;
+      font-size: 12px;
+      color: var(--text-muted);
+      text-align: center;
+      font-style: italic;
+    }
+
     /* Center — content */
     #content {
       flex: 1;
@@ -1015,6 +1065,7 @@
     }
 
     #open-btn,
+    #open-file-btn,
     #examples-btn {
       padding: 10px 20px;
       border: none;
@@ -1025,9 +1076,15 @@
       transition: opacity 0.15s;
     }
 
-    #open-btn {
+    #open-file-btn {
       background: var(--accent);
       color: white;
+    }
+
+    #open-btn {
+      background: var(--code-bg);
+      color: var(--text);
+      border: 1px solid var(--border);
     }
 
     #examples-btn {
@@ -1037,8 +1094,153 @@
     }
 
     #open-btn:hover,
+    #open-file-btn:hover,
     #examples-btn:hover {
       opacity: 0.85;
+    }
+
+    #welcome-recents {
+      margin-top: 28px;
+      text-align: left;
+      max-width: 420px;
+      min-width: 320px;
+    }
+
+    #welcome-recents-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    .welcome-link {
+      background: none;
+      border: none;
+      padding: 0;
+      font: inherit;
+      color: var(--accent);
+      cursor: pointer;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+    .welcome-link:hover { text-decoration: underline; }
+
+    #welcome-recents-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .welcome-recent-item {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      color: var(--text);
+      transition: background 0.1s;
+      font-size: 13px;
+    }
+    .welcome-recent-item:hover {
+      background: var(--sidebar-hover);
+    }
+    .welcome-recent-item.missing {
+      opacity: 0.5;
+      cursor: default;
+    }
+    .welcome-recent-item .name {
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      flex-shrink: 0;
+      max-width: 50%;
+    }
+    .welcome-recent-item .path {
+      color: var(--text-muted);
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      direction: rtl;
+      text-align: left;
+      flex: 1;
+    }
+    .welcome-recent-item .kind {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1px 5px;
+    }
+
+    #welcome-tips {
+      margin-top: 28px;
+      display: flex;
+      gap: 14px;
+      justify-content: center;
+      font-size: 11px;
+      color: var(--text-muted);
+      flex-wrap: wrap;
+    }
+
+    /* Toast */
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--text);
+      color: var(--bg);
+      padding: 10px 16px;
+      border-radius: 8px;
+      font-size: 13px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+      z-index: 3000;
+      cursor: pointer;
+      max-width: 80vw;
+      text-align: center;
+    }
+    #toast[data-kind="error"] {
+      background: #b00020;
+      color: white;
+    }
+
+    /* Context menu (sidebar + recents right-click) */
+    .ctx-menu {
+      position: fixed;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+      z-index: 2500;
+      min-width: 200px;
+      padding: 4px 0;
+      font-size: 13px;
+    }
+    .ctx-menu button {
+      display: block;
+      width: 100%;
+      text-align: left;
+      background: none;
+      border: none;
+      padding: 6px 14px;
+      color: var(--text);
+      cursor: pointer;
+      font: inherit;
+    }
+    .ctx-menu button:hover {
+      background: var(--sidebar-hover);
     }
 
     /* Right sidebar — outline */
@@ -1963,10 +2165,23 @@
             Open a folder to browse your documentation.
           </p>
           <div id="empty-state-buttons">
+            <button id="open-file-btn" data-i18n="empty.open-file">Open file</button>
             <button id="open-btn" data-i18n="empty.open">Open folder</button>
             <button id="examples-btn" data-i18n="empty.examples">
               View examples
             </button>
+          </div>
+          <div id="welcome-recents" hidden>
+            <div id="welcome-recents-header">
+              <span data-i18n="welcome.recents">Recent</span>
+              <button id="welcome-recents-clear" class="welcome-link" data-i18n="welcome.clear">Clear</button>
+            </div>
+            <ul id="welcome-recents-list"></ul>
+          </div>
+          <div id="welcome-tips">
+            <span data-i18n="welcome.tip.open">⌘O Open file</span>
+            <span data-i18n="welcome.tip.openfolder">⇧⌘O Open folder</span>
+            <span data-i18n="welcome.tip.prefs">⌘, Preferences</span>
           </div>
         </div>
         <div id="markdown" style="display:none"></div>
