@@ -31,6 +31,7 @@ import {
 import { loadSession, saveSession } from "./session";
 import { runExport, type ExportFormat } from "./export";
 import { SidebarTree, type ScanResult } from "./sidebar-tree";
+import { TabManager, type Tab } from "./tabs";
 import { showToast } from "./toast";
 import {
   renderRecentsList,
@@ -574,23 +575,106 @@ let activeFile: string | null = null;
 let scrollObserver: IntersectionObserver | null = null;
 
 const sidebarTree = new SidebarTree(fileList, {
-  onOpenFile: (absPath) => {
-    // newTab will become meaningful when the TabManager lands in PR 4.
-    void openFileFromAbsolutePath(absPath);
+  onOpenFile: (absPath, opts) => {
+    if (opts.newTab) {
+      void tabManager.openInNewTab(absPath);
+    } else {
+      void tabManager.openInActiveTab(absPath);
+    }
   },
   onReveal: (absPath) => revealInFinder(absPath),
   onRevealDir: (absPath) => revealInFinder(absPath),
 });
+
+const tabBar = document.getElementById("tab-bar") as HTMLDivElement;
+const tabManager = new TabManager(tabBar, {
+  onActivate: async (filePath, scrollY) => {
+    // The tab system stores absolute paths. Route through the same
+    // helper used by the sidebar so root-switching is consistent.
+    await openFileFromAbsolutePath(filePath);
+    // Restore scroll once the DOM is in place. requestAnimationFrame is
+    // a single tick after parseMarkdown + mermaid → adequate for most
+    // pages without a heavy heuristic.
+    requestAnimationFrame(() => {
+      contentEl.scrollTop = scrollY;
+    });
+  },
+  onChange: () => {
+    schedulePersistSession();
+  },
+  onEmpty: () => {
+    // Last tab closed — clear the doc area but keep the folder open
+    // so the user can still browse the sidebar.
+    activeFile = null;
+    markdownEl.innerHTML = "";
+    markdownEl.style.display = "none";
+    emptyState.style.display = "block";
+    contentEl.classList.add("empty");
+    titlebarFilename.textContent = "";
+    outlineNav.innerHTML = "";
+    outlineEl.style.display = "none";
+    setSearchEnabled(false);
+    sidebarTree.setActive(null);
+    void pushRecentsToNativeMenu();
+    schedulePersistSession();
+  },
+});
+
+let sessionPersistTimer: number | null = null;
+function schedulePersistSession(): void {
+  if (sessionPersistTimer !== null) {
+    window.clearTimeout(sessionPersistTimer);
+  }
+  sessionPersistTimer = window.setTimeout(() => {
+    sessionPersistTimer = null;
+    void persistSessionNow();
+  }, 500);
+}
+
+async function persistSessionNow(): Promise<void> {
+  const store = await load(STORE_FILE);
+  const current = await loadSession(store);
+  const state = tabManager.getState();
+  if (state.activeId) {
+    tabManager.captureScrollOfActive(contentEl.scrollTop);
+  }
+  const refreshed = tabManager.getState();
+  const tabs = refreshed.tabs.map((t) => ({
+    filePath: t.filePath,
+    scrollY: t.scrollY,
+  }));
+  const activeIdx = refreshed.activeId
+    ? refreshed.tabs.findIndex((t) => t.id === refreshed.activeId)
+    : -1;
+  await saveSession(store, {
+    folder: current.folder,
+    tabs,
+    activeTabIndex: activeIdx,
+  });
+}
+
+// Monotonic counter so concurrent scans (folder A → folder B before A's
+// async scan finished) can't have the stale result clobber the fresh one.
+// A scan whose generation doesn't match the latest issued is dropped.
+let sidebarScanGeneration = 0;
 
 async function refreshSidebarTree(autoExpandRoot = true): Promise<void> {
   if (!rootPath) {
     sidebarTree.clear();
     return;
   }
+  const myGen = ++sidebarScanGeneration;
+  const myRoot = rootPath;
   try {
     const result = await invoke<ScanResult>("scan_markdown_tree", {
-      root: rootPath,
+      root: myRoot,
     });
+    // Bail if either the user switched folders or kicked off another
+    // scan while ours was in flight. Without this, A → B → setTree(A)
+    // would show the wrong tree.
+    if (myGen !== sidebarScanGeneration || myRoot !== rootPath) {
+      return;
+    }
     sidebarTree.setTree(result, autoExpandRoot);
     sidebarTree.setActive(absoluteActiveFile());
   } catch (e) {
@@ -603,11 +687,20 @@ function absoluteActiveFile(): string | null {
   return `${rootPath}/${activeFile}`;
 }
 
+// Used by TabManager.onActivate (and the sidebar click path that goes
+// through it). Loads the file by relative path under the current root,
+// switching roots if the file lives elsewhere.
 async function openFileFromAbsolutePath(absPath: string): Promise<void> {
   if (!rootPath || !absPath.startsWith(rootPath + "/")) {
-    // The file sits outside the current root — fall back to "open as
-    // standalone file" which resets root to the file's parent dir.
-    await openFileFromPath(absPath);
+    const lastSep = absPath.lastIndexOf("/");
+    const parentDir = absPath.substring(0, lastSep);
+    const fileName = absPath.substring(lastSep + 1);
+    await setRootPath(parentDir, fileName);
+    await pushToRecents({
+      kind: "file",
+      path: absPath,
+      displayName: fileName,
+    });
     return;
   }
   const relative = absPath.slice(rootPath.length + 1);
@@ -655,12 +748,18 @@ function basename(p: string): string {
   return lastSep >= 0 ? p.slice(lastSep + 1) : p;
 }
 
+// Top-level "open this file" entry — used by ⌘O, recents, DnD, the
+// cold-start pending-open buffer, and the open-file Tauri event. Always
+// routes through the tab manager: a new tab if no folder was open or
+// the file is outside the current root; otherwise opens-in-place.
 async function openFileFromPath(filePath: string): Promise<void> {
   const lastSep = filePath.lastIndexOf("/");
-  const parentDir = filePath.substring(0, lastSep);
   const fileName = filePath.substring(lastSep + 1);
-  await setRootPath(parentDir, fileName);
   await pushToRecents({ kind: "file", path: filePath, displayName: fileName });
+  // openInNewTab is the right primitive here: it dedupes against existing
+  // tabs (re-clicking an already-open file just activates it) and creates
+  // a fresh tab otherwise. The host's onActivate handles root-switching.
+  await tabManager.openInNewTab(filePath);
 }
 
 async function openFile(): Promise<void> {
@@ -856,6 +955,50 @@ function handleGlobalSearchShortcut(e: KeyboardEvent): void {
   }
 }
 
+// ⌘T / ⌘W / ⌘1..⌘9 / ⌘⇧[ / ⌘⇧]. Registered at init time. Bypassed
+// while typing in form fields so search input shortcuts still work.
+function handleTabShortcut(e: KeyboardEvent): void {
+  const meta = e.metaKey || e.ctrlKey;
+  if (!meta) return;
+  const target = e.target as HTMLElement | null;
+  const inField =
+    target &&
+    (target.tagName === "INPUT" ||
+      target.tagName === "TEXTAREA" ||
+      target.isContentEditable);
+  // Tab cycling is always allowed; the others would steal typing keys.
+  const key = e.key.toLowerCase();
+
+  if (key === "t" && !inField) {
+    e.preventDefault();
+    void openFile();
+    return;
+  }
+  if (key === "w" && !e.shiftKey && !inField) {
+    // ⌘W closes the active tab; falls through to native close-window
+    // only when no tab is open.
+    if (tabManager.getState().tabs.length > 0) {
+      e.preventDefault();
+      void tabManager.closeActive();
+    }
+    return;
+  }
+  if (e.shiftKey && (key === "]" || key === "}")) {
+    e.preventDefault();
+    tabManager.cycle(1);
+    return;
+  }
+  if (e.shiftKey && (key === "[" || key === "{")) {
+    e.preventDefault();
+    tabManager.cycle(-1);
+    return;
+  }
+  if (!inField && /^[1-9]$/.test(key)) {
+    e.preventDefault();
+    tabManager.jumpTo(Number(key));
+  }
+}
+
 function applySearchOptions(): void {
   searchController?.setOptions({
     caseSensitive: searchOptCase.checked,
@@ -905,6 +1048,20 @@ function initSearch(): void {
   searchOptWholeWord.addEventListener("change", applySearchOptions);
 
   document.addEventListener("keydown", handleGlobalSearchShortcut);
+  document.addEventListener("keydown", handleTabShortcut);
+
+  // Persist the scroll position into the active tab so cycling back
+  // returns to the same reading position. Throttled implicitly via
+  // requestAnimationFrame.
+  let scrollRafScheduled = false;
+  contentEl.addEventListener("scroll", () => {
+    if (scrollRafScheduled) return;
+    scrollRafScheduled = true;
+    requestAnimationFrame(() => {
+      scrollRafScheduled = false;
+      tabManager.captureScrollOfActive(contentEl.scrollTop);
+    });
+  });
 }
 
 // --- Preferences modal ---
@@ -1862,11 +2019,62 @@ async function init(): Promise<void> {
     return;
   }
 
-  const saved = await loadRootPath();
-  if (saved) {
-    await setRootPath(saved);
+  const savedSession = await loadSession(store);
+  if (savedSession.folder) {
+    await setRootPath(savedSession.folder);
+  }
+  // Restore tabs after the root is set so file paths resolve. Validate
+  // each tab still exists on disk AND is a file (not a directory left
+  // behind by a poisoned session.json). Silently drop everything else.
+  if (savedSession.tabs.length > 0) {
+    const paths = savedSession.tabs.map((t) => t.filePath);
+    let validity: Array<{ exists: boolean; kind: string }> = [];
+    try {
+      validity = await invoke<Array<{ exists: boolean; kind: string }>>(
+        "validate_paths",
+        { paths },
+      );
+    } catch {
+      validity = paths.map(() => ({ exists: false, kind: "missing" }));
+    }
+    const surviving = savedSession.tabs.filter(
+      (_, i) => validity[i]?.exists && validity[i]?.kind === "file",
+    );
+    if (surviving.length > 0) {
+      // IDs are prefixed with "restored-" to avoid colliding with the
+      // module-level counter used by openInNewTab. Without this, the
+      // first new tab opened after a restore would get id "tab-1" —
+      // the same as the first restored tab — and clicking one would
+      // mis-activate the other.
+      //
+      // Guard: this collision-avoidance assumes restore-with-tabs runs
+      // at most once per process. A future refactor that calls it
+      // twice would silently re-allocate "restored-1" and produce
+      // duplicates. Trip an error if that ever happens so the bug
+      // surfaces immediately.
+      if (sessionRestored) {
+        throw new Error(
+          "session restore called twice — restored- IDs would collide",
+        );
+      }
+      sessionRestored = true;
+      const restoredTabs: Tab[] = surviving.map((t, i) => ({
+        id: `restored-${i + 1}`,
+        filePath: t.filePath,
+        title: t.filePath.split("/").pop()?.replace(/\.[^.]+$/, "") ?? "tab",
+        scrollY: t.scrollY,
+      }));
+      const activeIdx = Math.max(
+        0,
+        Math.min(savedSession.activeTabIndex, restoredTabs.length - 1),
+      );
+      await tabManager.restore(restoredTabs, restoredTabs[activeIdx].id);
+      await tabManager.activate(restoredTabs[activeIdx].id);
+    }
   }
 }
+
+let sessionRestored = false;
 
 async function setRootPath(path: string, fileToOpen?: string): Promise<void> {
   rootPath = path;
@@ -1881,6 +2089,8 @@ async function setRootPath(path: string, fileToOpen?: string): Promise<void> {
   });
   await renderSidebar();
   if (fileToOpen) {
+    // fileToOpen is relative to the new root; load directly so we don't
+    // re-trigger root-resolution through the tab manager.
     await loadFile(fileToOpen);
   } else {
     await autoSelectReadme();
@@ -1902,6 +2112,10 @@ async function closeFolder(): Promise<void> {
   rootName = "";
   currentPath = [];
   activeFile = null;
+  // Close all tabs so the doc area returns to the welcome state.
+  // Restore-on-relaunch persists session.tabs separately; closing the
+  // folder is an explicit "start fresh" gesture.
+  await tabManager.restore([], null);
   sidebarTree.clear();
   breadcrumb.innerHTML = "";
   markdownEl.innerHTML = "";

@@ -106,6 +106,63 @@
       flex-shrink: 0;
     }
 
+    /* Tab bar (PR 4b) — sits between title and actions, scrolls horizontally. */
+    #tab-bar {
+      display: flex;
+      gap: 4px;
+      align-items: center;
+      flex: 1;
+      min-width: 0;
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding: 0 8px;
+      scrollbar-width: none;
+    }
+    #tab-bar::-webkit-scrollbar { display: none; }
+    #tab-bar[hidden] { display: none; }
+
+    .tab-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 8px 4px 10px;
+      border-radius: 6px;
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--text-muted);
+      font-size: 12px;
+      max-width: 180px;
+      flex-shrink: 0;
+      cursor: pointer;
+      transition: background 0.1s, color 0.1s;
+      user-select: none;
+    }
+    .tab-pill:hover { background: var(--sidebar-hover); color: var(--text); }
+    .tab-pill.active {
+      background: var(--sidebar-active);
+      color: var(--text);
+      font-weight: 500;
+    }
+    .tab-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 140px;
+    }
+    .tab-close {
+      width: 16px;
+      height: 16px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 4px;
+      font-size: 14px;
+      line-height: 1;
+      color: var(--text-muted);
+    }
+    .tab-close:hover { background: var(--sidebar-hover); color: var(--text); }
+    .tab-pill.active .tab-close { color: var(--text); }
+
     /* Search box */
     #search-box {
       display: flex;
@@ -2043,6 +2100,7 @@
       <div id="titlebar-title" data-tauri-drag-region>
         <span id="titlebar-filename" data-tauri-drag-region></span>
       </div>
+      <div id="tab-bar" hidden></div>
       <div id="titlebar-actions">
         <button id="pdf-btn" data-i18n-title="titlebar.pdf">
           <svg
