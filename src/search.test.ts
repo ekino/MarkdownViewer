@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildIndex,
   createSearchController,
@@ -227,5 +227,29 @@ describe("createSearchController", () => {
     ctrl.clear();
     expect(ui.input.value).toBe("");
     expect(ctrl.getState().total).toBe(0);
+  });
+
+  it("clear() cancels a pending debounced query so highlights stay cleared", () => {
+    vi.useFakeTimers();
+    try {
+      const c = makeContainer("<p>foo foo</p>");
+      const ui = makeUI();
+      const ctrl = createSearchController(c, ui);
+
+      // Simulate the user typing, which schedules a debounced search.
+      ui.input.value = "foo";
+      ui.input.dispatchEvent(new Event("input"));
+
+      // User clears/dismisses before the debounce fires.
+      ctrl.clear();
+      expect(ctrl.getState().total).toBe(0);
+
+      // The stale debounce must not re-apply highlights.
+      vi.advanceTimersByTime(200);
+      expect(ctrl.getState().total).toBe(0);
+      expect(c.querySelectorAll("mark.mdv-search-hit")).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

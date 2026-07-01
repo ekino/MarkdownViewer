@@ -60,12 +60,17 @@ const supportsCSSHighlights =
     "undefined" &&
   typeof Highlight !== "undefined";
 
+interface Debounced<T extends (...args: never[]) => void> {
+  (...args: Parameters<T>): void;
+  cancel(): void;
+}
+
 function debounce<T extends (...args: never[]) => void>(
   fn: T,
   ms: number
-): (...args: Parameters<T>) => void {
+): Debounced<T> {
   let handle: ReturnType<typeof setTimeout> | null = null;
-  return (...args: Parameters<T>) => {
+  const debounced = (...args: Parameters<T>) => {
     if (handle !== null) {
       clearTimeout(handle);
     }
@@ -74,6 +79,13 @@ function debounce<T extends (...args: never[]) => void>(
       fn(...args);
     }, ms);
   };
+  debounced.cancel = () => {
+    if (handle !== null) {
+      clearTimeout(handle);
+      handle = null;
+    }
+  };
+  return debounced;
 }
 
 function isExcluded(node: Node): boolean {
@@ -452,6 +464,7 @@ export function createSearchController(
   }
 
   function reset(): void {
+    debouncedSetQuery.cancel();
     index = null;
     ranges = [];
     currentIndex = -1;
@@ -464,6 +477,7 @@ export function createSearchController(
   }
 
   function clear(): void {
+    debouncedSetQuery.cancel();
     query = "";
     ui.input.value = "";
     ranges = [];
@@ -472,9 +486,11 @@ export function createSearchController(
     notify();
   }
 
-  const debouncedSetQuery = debounce((q: string) => setQuery(q), 100);
+  // Read the live input value when the timer fires (not the value captured at
+  // schedule time) so a query cleared during the debounce window resolves to "".
+  const debouncedSetQuery = debounce(() => setQuery(ui.input.value), 100);
   ui.input.addEventListener("input", () => {
-    debouncedSetQuery(ui.input.value);
+    debouncedSetQuery();
   });
 
   return {
