@@ -233,6 +233,10 @@ pub fn run(path_arg: Option<String>) {
                 .accelerator("CmdOrCtrl+,")
                 .build(app)?;
 
+            let find = MenuItemBuilder::with_id("find", "Find…")
+                .accelerator("CmdOrCtrl+F")
+                .build(app)?;
+
             let app_name = app.package_info().name.clone();
 
             let menu = MenuBuilder::new(app)
@@ -255,6 +259,17 @@ pub fn run(path_arg: Option<String>) {
                         .separator()
                         .close_window()
                         .build()?,
+                    &SubmenuBuilder::new(app, "Edit")
+                        .undo()
+                        .redo()
+                        .separator()
+                        .cut()
+                        .copy()
+                        .paste()
+                        .select_all()
+                        .separator()
+                        .items(&[&find])
+                        .build()?,
                 ])
                 .build()?;
 
@@ -268,6 +283,9 @@ pub fn run(path_arg: Option<String>) {
                     }
                     "preferences" => {
                         let _ = app_handle.emit("menu-open-preferences", ());
+                    }
+                    "find" => {
+                        let _ = app_handle.emit("menu-find", ());
                     }
                     _ => {}
                 }

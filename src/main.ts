@@ -499,6 +499,14 @@ function handleSearchInputKey(e: KeyboardEvent): void {
   }
 }
 
+function focusSearch(): void {
+  if (searchInput.disabled) {
+    return;
+  }
+  searchInput.focus();
+  searchInput.select();
+}
+
 function handleGlobalSearchShortcut(e: KeyboardEvent): void {
   const meta = e.metaKey || e.ctrlKey;
   if (!meta) {
@@ -507,8 +515,7 @@ function handleGlobalSearchShortcut(e: KeyboardEvent): void {
   const key = e.key.toLowerCase();
   if (key === "f" && !searchInput.disabled) {
     e.preventDefault();
-    searchInput.focus();
-    searchInput.select();
+    focusSearch();
     return;
   }
   if (key === "g" && !searchInput.disabled && searchInput.value) {
@@ -1413,6 +1420,9 @@ async function init(): Promise<void> {
   });
   appWindow.listen("menu-open-preferences", () => {
     openPrefs();
+  });
+  appWindow.listen("menu-find", () => {
+    focusSearch();
   });
 
   // Cold-start: pull anything the backend buffered (CLI arg or RunEvent::Opened
