@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.10.0](https://github.com/ekino/MarkdownViewer/releases/tag/v0.10.0) - 2026-07-01
+
+### Added
+
+- Native Preferences window opened from the menu bar (MarkdownViewer › Preferences…, ⌘,) organized in General, Fonts and Appearance tabs
+- General tab: interface language (French / English, auto-detected from the system locale on first launch) and outline panel visibility (Auto / Always / Hidden)
+- Fonts tab: document text size presets (Small / Medium / Large) plus advanced typography (body/code font pickers from installed system fonts, weight, exact pixel size, one-click reset)
+- Appearance tab: 8 predefined themes (Light, Dark, GitHub, Dracula, Solarized Light/Dark, Nord, Sepia) shown as preview tiles, "Follow system" light/dark pairing, and an in-app visual theme editor with live preview
+- Create, duplicate, edit, import (JSON) and reveal-in-Finder for custom themes, stored as JSON in the app support directory and reloaded at startup
+- Full French / English translations applied via `data-i18n` attributes with English fallback
+
+### Changed
+
+- Destructive theme-deletion confirmation uses a styled in-app modal instead of the native blocking `confirm()`
+- Closing Preferences resets transient state (active tab, editor, scroll) so each reopen lands on a clean view
+
+### Fixed
+
+- Dragging the custom title bar now moves the window (granted `core:window:allow-start-dragging`), matching native macOS behavior
+
+### Accessibility
+
+- Native focus trap on every modal (Preferences, theme editor, image lightbox, mermaid fullscreen, confirm dialog) with Tab / Shift+Tab cycling, Escape to close and focus restoration
+- Preferences tabs follow the ARIA tabs pattern (roving focus, Left/Right/Home/End, `aria-selected` kept in sync)
+
 ## [0.9.0](https://github.com/ekino/MarkdownViewer/releases/tag/v0.9.0) - 2026-05-09
 
 ### Added
