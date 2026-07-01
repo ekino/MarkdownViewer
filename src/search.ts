@@ -493,6 +493,16 @@ export function createSearchController(
     debouncedSetQuery();
   });
 
+  // WebKit's native clear (✕) button on <input type="search"> empties the field
+  // and fires a "search" event WITHOUT an "input" event, so the debounced handler
+  // above never runs and highlights would linger. Clear immediately on it.
+  ui.input.addEventListener("search", () => {
+    if (ui.input.value === "") {
+      debouncedSetQuery.cancel();
+      setQuery("");
+    }
+  });
+
   return {
     setQuery,
     next,

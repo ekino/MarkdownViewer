@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildIndex,
   createSearchController,
@@ -251,5 +251,68 @@ describe("createSearchController", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("clears highlights when the native search clear button empties the field", () => {
+    // WebKit's ✕ button on <input type="search"> fires only a "search" event
+    // (no "input"), so the controller must honor it.
+    const c = makeContainer("<p>foo foo</p>");
+    const ui = makeUI();
+    const ctrl = createSearchController(c, ui);
+    ctrl.setQuery("foo");
+    expect(ctrl.getState().total).toBe(2);
+    expect(c.querySelectorAll("mark.mdv-search-hit").length).toBeGreaterThan(0);
+
+    ui.input.value = "";
+    ui.input.dispatchEvent(new Event("search"));
+
+    expect(ctrl.getState().total).toBe(0);
+    expect(c.querySelectorAll("mark.mdv-search-hit")).toHaveLength(0);
+  });
+});
+
+// The production app runs in WKWebView, which supports the CSS Custom Highlight
+// API (`supportsCSSHighlights === true`) — a different code path from the jsdom
+// <mark> fallback exercised above. Polyfill the API and re-import the module so
+// the real path is covered.
+describe("createSearchController (CSS Custom Highlight API path)", () => {
+  class FakeHighlight {
+    ranges: Range[];
+    constructor(...ranges: Range[]) {
+      this.ranges = ranges;
+    }
+  }
+
+  async function loadWithCSSHighlights() {
+    const reg = new Map<string, unknown>();
+    (globalThis as unknown as { Highlight: unknown }).Highlight = FakeHighlight;
+    (globalThis as unknown as { CSS: unknown }).CSS = { highlights: reg };
+    vi.resetModules();
+    const mod = await import("./search");
+    return { reg, createSearchController: mod.createSearchController };
+  }
+
+  afterEach(() => {
+    vi.resetModules();
+    delete (globalThis as unknown as { Highlight?: unknown }).Highlight;
+    delete (globalThis as unknown as { CSS?: unknown }).CSS;
+    document.body.innerHTML = "";
+  });
+
+  it("removes highlights from the registry when the search clear button fires", async () => {
+    const { reg, createSearchController: create } = await loadWithCSSHighlights();
+    const c = makeContainer("<p>foo foo foo</p>");
+    const ui = makeUI();
+    const ctrl = create(c, ui);
+
+    ctrl.setQuery("foo");
+    expect(reg.size).toBeGreaterThan(0);
+
+    // Native ✕ button: field emptied, only a "search" event fires.
+    ui.input.value = "";
+    ui.input.dispatchEvent(new Event("search"));
+
+    expect(reg.size).toBe(0);
+    expect(ctrl.getState().total).toBe(0);
   });
 });
