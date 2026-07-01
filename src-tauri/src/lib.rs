@@ -1,13 +1,84 @@
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
-use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
-use tauri::{Emitter, Manager};
+use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, Submenu, SubmenuBuilder};
+use tauri::{Emitter, Manager, Wry};
 
 #[derive(Clone, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 enum PendingOpen {
     File { path: String },
     Folder { path: String },
+}
+
+#[derive(serde::Deserialize)]
+struct RecentItem {
+    path: String,
+    kind: String,
+    label: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct RecentOpen {
+    kind: String,
+    path: String,
+}
+
+// Handle to the "Open Recent" submenu, stored so the frontend can rebuild its
+// contents at runtime (via `update_recent_menu`) as the recents list changes.
+// The menu itself is owned by Rust; the recents *state* lives in the frontend
+// store, keeping state ownership on the TS side per the app's conventions.
+static RECENT_SUBMENU: OnceLock<Mutex<Option<Submenu<Wry>>>> = OnceLock::new();
+
+fn recent_slot() -> &'static Mutex<Option<Submenu<Wry>>> {
+    RECENT_SUBMENU.get_or_init(|| Mutex::new(None))
+}
+
+// Menu item ids for recent entries embed the path after a fixed prefix, so the
+// menu-event handler can recover the path even if it contains a colon.
+const RECENT_FILE_PREFIX: &str = "recent-file:";
+const RECENT_FOLDER_PREFIX: &str = "recent-folder:";
+
+#[tauri::command]
+fn update_recent_menu(app: tauri::AppHandle, items: Vec<RecentItem>) -> Result<(), String> {
+    let guard = recent_slot().lock().map_err(|e| e.to_string())?;
+    let Some(submenu) = guard.as_ref() else {
+        return Ok(()); // menu not built yet — nothing to update
+    };
+
+    let count = submenu.items().map_err(|e| e.to_string())?.len();
+    for _ in 0..count {
+        submenu.remove_at(0).map_err(|e| e.to_string())?;
+    }
+
+    if items.is_empty() {
+        let none = MenuItemBuilder::with_id("recent_none", "No Recent Files")
+            .enabled(false)
+            .build(&app)
+            .map_err(|e| e.to_string())?;
+        submenu.append(&none).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    for item in &items {
+        let prefix = if item.kind == "folder" {
+            RECENT_FOLDER_PREFIX
+        } else {
+            RECENT_FILE_PREFIX
+        };
+        let id = format!("{prefix}{}", item.path);
+        let mi = MenuItemBuilder::with_id(id, &item.label)
+            .build(&app)
+            .map_err(|e| e.to_string())?;
+        submenu.append(&mi).map_err(|e| e.to_string())?;
+    }
+
+    let sep = PredefinedMenuItem::separator(&app).map_err(|e| e.to_string())?;
+    submenu.append(&sep).map_err(|e| e.to_string())?;
+    let clear = MenuItemBuilder::with_id("recent_clear", "Clear Menu")
+        .build(&app)
+        .map_err(|e| e.to_string())?;
+    submenu.append(&clear).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 // Global slot — available from process start, so `RunEvent::Opened` can write
@@ -217,7 +288,8 @@ pub fn run(path_arg: Option<String>) {
             list_disk_themes,
             save_disk_theme,
             delete_disk_theme,
-            reveal_themes_dir
+            reveal_themes_dir,
+            update_recent_menu
         ])
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
@@ -225,8 +297,34 @@ pub fn run(path_arg: Option<String>) {
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
             // Build native menu
-            let open_folder = MenuItemBuilder::with_id("open_folder", "Open Folder…")
+            let open_file = MenuItemBuilder::with_id("open_file", "Open File…")
                 .accelerator("CmdOrCtrl+O")
+                .build(app)?;
+
+            let open_folder = MenuItemBuilder::with_id("open_folder", "Open Folder…")
+                .accelerator("CmdOrCtrl+Shift+O")
+                .build(app)?;
+
+            let recent_submenu = SubmenuBuilder::new(app, "Open Recent")
+                .item(
+                    &MenuItemBuilder::with_id("recent_none", "No Recent Files")
+                        .enabled(false)
+                        .build(app)?,
+                )
+                .build()?;
+            if let Ok(mut slot) = recent_slot().lock() {
+                *slot = Some(recent_submenu.clone());
+            }
+
+            let print_item = MenuItemBuilder::with_id("print", "Print…")
+                .accelerator("CmdOrCtrl+P")
+                .build(app)?;
+
+            let export_pdf_item = MenuItemBuilder::with_id("export_pdf", "Export as PDF…")
+                .accelerator("CmdOrCtrl+Shift+S")
+                .build(app)?;
+
+            let toggle_theme = MenuItemBuilder::with_id("toggle_theme", "Toggle Dark Mode")
                 .build(app)?;
 
             let preferences = MenuItemBuilder::with_id("preferences", "Preferences…")
@@ -255,7 +353,10 @@ pub fn run(path_arg: Option<String>) {
                         .quit()
                         .build()?,
                     &SubmenuBuilder::new(app, "File")
-                        .items(&[&open_folder])
+                        .items(&[&open_file, &open_folder])
+                        .item(&recent_submenu)
+                        .separator()
+                        .items(&[&print_item, &export_pdf_item])
                         .separator()
                         .close_window()
                         .build()?,
@@ -270,6 +371,9 @@ pub fn run(path_arg: Option<String>) {
                         .separator()
                         .items(&[&find])
                         .build()?,
+                    &SubmenuBuilder::new(app, "View")
+                        .items(&[&toggle_theme])
+                        .build()?,
                 ])
                 .build()?;
 
@@ -277,15 +381,45 @@ pub fn run(path_arg: Option<String>) {
 
             let app_handle = app.handle().clone();
             app.on_menu_event(move |_app, event| {
-                match event.id().0.as_str() {
+                let id = event.id().0.as_str();
+                match id {
+                    "open_file" => {
+                        let _ = app_handle.emit("menu-open-file", ());
+                    }
                     "open_folder" => {
                         let _ = app_handle.emit("menu-open-folder", ());
+                    }
+                    "print" => {
+                        let _ = app_handle.emit("menu-print", ());
+                    }
+                    "export_pdf" => {
+                        let _ = app_handle.emit("menu-export-pdf", ());
+                    }
+                    "toggle_theme" => {
+                        let _ = app_handle.emit("menu-toggle-theme", ());
                     }
                     "preferences" => {
                         let _ = app_handle.emit("menu-open-preferences", ());
                     }
                     "find" => {
                         let _ = app_handle.emit("menu-find", ());
+                    }
+                    "recent_clear" => {
+                        let _ = app_handle.emit("menu-clear-recent", ());
+                    }
+                    _ if id.starts_with(RECENT_FILE_PREFIX) => {
+                        let path = id[RECENT_FILE_PREFIX.len()..].to_string();
+                        let _ = app_handle.emit(
+                            "menu-open-recent",
+                            RecentOpen { kind: "file".into(), path },
+                        );
+                    }
+                    _ if id.starts_with(RECENT_FOLDER_PREFIX) => {
+                        let path = id[RECENT_FOLDER_PREFIX.len()..].to_string();
+                        let _ = app_handle.emit(
+                            "menu-open-recent",
+                            RecentOpen { kind: "folder".into(), path },
+                        );
                     }
                     _ => {}
                 }

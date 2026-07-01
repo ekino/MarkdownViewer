@@ -72,13 +72,14 @@ import {
   toHexForPicker,
 } from "./theme-editor";
 import { createSearchController, type SearchController } from "./search";
-import type { Entry } from "./utils";
+import type { Entry, RecentEntry } from "./utils";
 import {
   classifyLink,
   extractRootName,
   filterAndSortEntries,
   findReadme,
   getFullPath,
+  mergeRecent,
   parseMarkdownHref,
   resolvePath,
 } from "./utils";
@@ -191,13 +192,11 @@ async function initTheme(): Promise<void> {
 
 import { invoke } from "@tauri-apps/api/core";
 
-const printBtn = document.getElementById("print-btn") as HTMLButtonElement;
-printBtn.addEventListener("click", () => {
+function printDocument(): void {
   invoke("print_webview");
-});
+}
 
-const pdfBtn = document.getElementById("pdf-btn") as HTMLButtonElement;
-pdfBtn.addEventListener("click", async () => {
+async function exportPdf(): Promise<void> {
   const defaultName = activeFile
     ? activeFile.split("/").pop()!.replace(/\.md$/i, ".pdf")
     : "document.pdf";
@@ -215,9 +214,9 @@ pdfBtn.addEventListener("click", async () => {
   } finally {
     document.body.classList.remove("print-mode");
   }
-});
+}
 
-themeToggle.addEventListener("click", async () => {
+async function toggleTheme(): Promise<void> {
   const activeId = activeThemeId();
   const newId = themeCatalog[activeId]?.pair ?? activeId;
   currentThemeId = newId;
@@ -229,7 +228,15 @@ themeToggle.addEventListener("click", async () => {
   await store.save();
   syncPrefsUI();
   refreshThemeGridSelection();
-});
+}
+
+const printBtn = document.getElementById("print-btn") as HTMLButtonElement;
+printBtn.addEventListener("click", printDocument);
+
+const pdfBtn = document.getElementById("pdf-btn") as HTMLButtonElement;
+pdfBtn.addEventListener("click", exportPdf);
+
+themeToggle.addEventListener("click", toggleTheme);
 
 let mermaidCounter = 0;
 
@@ -431,6 +438,8 @@ let scrollObserver: IntersectionObserver | null = null;
 
 const STORE_FILE = "settings.json";
 const STORE_KEY = "lastFolder";
+const RECENT_KEY = "recentEntries";
+const RECENT_MAX = 10;
 
 // --- Store persistence ---
 
@@ -443,6 +452,40 @@ async function saveRootPath(path: string): Promise<void> {
 async function loadRootPath(): Promise<string | null> {
   const store = await load(STORE_FILE);
   return ((await store.get(STORE_KEY)) as string) ?? null;
+}
+
+// --- Recent files/folders ---
+// State lives here in the store; the native "Open Recent" submenu is rebuilt in
+// Rust via `update_recent_menu` whenever the list changes.
+
+async function loadRecents(): Promise<RecentEntry[]> {
+  const store = await load(STORE_FILE);
+  return ((await store.get(RECENT_KEY)) as RecentEntry[]) ?? [];
+}
+
+async function syncRecentMenu(entries: RecentEntry[]): Promise<void> {
+  const items = entries.map((e) => ({
+    path: e.path,
+    kind: e.kind,
+    label: e.path.split("/").pop() || e.path,
+  }));
+  await invoke("update_recent_menu", { items });
+}
+
+async function recordRecent(path: string, kind: "file" | "folder"): Promise<void> {
+  const store = await load(STORE_FILE);
+  const list = ((await store.get(RECENT_KEY)) as RecentEntry[]) ?? [];
+  const next = mergeRecent(list, { path, kind }, RECENT_MAX);
+  await store.set(RECENT_KEY, next);
+  await store.save();
+  await syncRecentMenu(next);
+}
+
+async function clearRecents(): Promise<void> {
+  const store = await load(STORE_FILE);
+  await store.set(RECENT_KEY, []);
+  await store.save();
+  await syncRecentMenu([]);
 }
 
 // --- Init ---
@@ -1418,12 +1461,37 @@ async function init(): Promise<void> {
   appWindow.listen("menu-open-folder", () => {
     openFolder();
   });
+  appWindow.listen("menu-open-file", () => {
+    openFile();
+  });
+  appWindow.listen("menu-print", () => {
+    printDocument();
+  });
+  appWindow.listen("menu-export-pdf", () => {
+    exportPdf();
+  });
+  appWindow.listen("menu-toggle-theme", () => {
+    toggleTheme();
+  });
+  appWindow.listen<RecentEntry>("menu-open-recent", (event) => {
+    if (event.payload.kind === "file") {
+      openFileFromPath(event.payload.path);
+    } else {
+      setRootPath(event.payload.path);
+    }
+  });
+  appWindow.listen("menu-clear-recent", () => {
+    clearRecents();
+  });
   appWindow.listen("menu-open-preferences", () => {
     openPrefs();
   });
   appWindow.listen("menu-find", () => {
     focusSearch();
   });
+
+  // Populate the native "Open Recent" submenu from the persisted list.
+  await syncRecentMenu(await loadRecents());
 
   // Cold-start: pull anything the backend buffered (CLI arg or RunEvent::Opened
   // that fired before our listener was registered). A pending open wins over
@@ -1450,6 +1518,11 @@ async function setRootPath(path: string, fileToOpen?: string): Promise<void> {
   currentPath = [];
   activeFile = null;
   await saveRootPath(path);
+  if (fileToOpen) {
+    await recordRecent(`${path}/${fileToOpen}`, "file");
+  } else {
+    await recordRecent(path, "folder");
+  }
   await renderSidebar();
   if (fileToOpen) {
     await loadFile(fileToOpen);
@@ -1462,6 +1535,16 @@ async function openFolder(): Promise<void> {
   const selected = await open({ directory: true, multiple: false });
   if (selected) {
     await setRootPath(selected);
+  }
+}
+
+async function openFile(): Promise<void> {
+  const selected = await open({
+    multiple: false,
+    filters: [{ name: "Markdown", extensions: ["md", "markdown", "mdx"] }],
+  });
+  if (typeof selected === "string") {
+    await openFileFromPath(selected);
   }
 }
 
