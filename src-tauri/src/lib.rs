@@ -29,6 +29,60 @@ fn print_webview(webview: tauri::Webview) -> Result<(), String> {
     webview.print().map_err(|e| e.to_string())
 }
 
+// No-op round-trip used to isolate IPC transport latency from filesystem
+// latency in the debug HUD. TEMP diagnostic.
+#[tauri::command]
+fn ping() {}
+
+// Last-modified time (ms since epoch) used to validate the frontend's in-memory
+// document cache. Metadata only — cheap even when the file body is slow to read
+// (e.g. a not-yet-materialized OneDrive/iCloud "online-only" file).
+#[tauri::command]
+async fn document_mtime(path: String) -> Result<u64, String> {
+    let meta = std::fs::metadata(&path).map_err(|_| "cannot stat file".to_string())?;
+    let modified = meta.modified().map_err(|_| "no mtime".to_string())?;
+    let ms = modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| "bad mtime".to_string())?
+        .as_millis() as u64;
+    Ok(ms)
+}
+
+// Reading through the `fs` plugin adds large fixed latency per open on
+// macOS/WKWebView. A direct app command reads the file itself.
+//
+// `async` on purpose: the read itself is slow on this machine (endpoint
+// security / synced-folder scanning adds seconds per open — the IPC round-trip
+// is ~1ms). A sync command would run on the main thread and freeze the UI; an
+// async command runs off it, so the window stays responsive during the read.
+//
+// Confined to the user's home dir or the bundled resource dir (examples):
+// canonicalize resolves `..`/symlinks, then we require the result to sit under
+// an allowed root. Errors stay generic to avoid leaking paths.
+#[tauri::command]
+async fn read_document(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    let requested =
+        std::fs::canonicalize(&path).map_err(|_| "cannot resolve path".to_string())?;
+
+    let roots = [app.path().home_dir(), app.path().resource_dir()]
+        .into_iter()
+        .flatten()
+        .filter_map(|p| std::fs::canonicalize(p).ok());
+    if !roots.into_iter().any(|root| requested.starts_with(&root)) {
+        return Err("path outside allowed roots".to_string());
+    }
+
+    let t = std::time::Instant::now();
+    let content =
+        std::fs::read_to_string(&requested).map_err(|_| "failed to read file".to_string())?;
+    eprintln!(
+        "[read_document] std::fs read {} bytes in {:?}",
+        content.len(),
+        t.elapsed()
+    );
+    Ok(content)
+}
+
 fn themes_dir_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     let dir = app
         .path()
@@ -210,6 +264,9 @@ pub fn run(path_arg: Option<String>) {
     let app = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             print_webview,
+            read_document,
+            document_mtime,
+            ping,
             export_pdf,
             get_pending_open,
             list_system_fonts,

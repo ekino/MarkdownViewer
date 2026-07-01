@@ -985,6 +985,7 @@
       flex: 1;
       overflow-y: auto;
       padding: 48px 40px;
+      position: relative;
     }
 
     #content.empty {
@@ -1834,6 +1835,56 @@
       max-width: 100%;
       margin: 0;
     }
+
+    #content-loading {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+    }
+    #content-loading[hidden] { display: none; }
+    .content-loading-spinner {
+      width: 28px;
+      height: 28px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: mdv-spin 0.7s linear infinite;
+    }
+    @keyframes mdv-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) {
+      .content-loading-spinner { animation-duration: 2s; }
+    }
+
+    #slow-read-notice {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin: 0 0 24px;
+      padding: 10px 14px;
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      border-radius: 6px;
+      background: var(--accent-light);
+      color: var(--text);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    #slow-read-notice[hidden] { display: none; }
+    #slow-read-notice .srn-text { flex: 1; }
+    #slow-read-notice .srn-close {
+      flex: none;
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 15px;
+      line-height: 1;
+      padding: 2px 4px;
+    }
+    #slow-read-notice .srn-close:hover { color: var(--text); }
     </style>
   </head>
   <body>
@@ -1969,7 +2020,19 @@
             </button>
           </div>
         </div>
+        <div id="slow-read-notice" hidden>
+          <span class="srn-text" data-i18n="slowRead.message"></span>
+          <button
+            class="srn-close"
+            id="slow-read-dismiss"
+            data-i18n-title="slowRead.dismiss"
+            aria-label="Dismiss"
+          >✕</button>
+        </div>
         <div id="markdown" style="display:none"></div>
+        <div id="content-loading" hidden>
+          <div class="content-loading-spinner"></div>
+        </div>
       </div>
 
       <div id="outline">
