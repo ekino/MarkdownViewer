@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - Appearance tab: 8 predefined themes (Light, Dark, GitHub, Dracula, Solarized Light/Dark, Nord, Sepia) shown as preview tiles, "Follow system" light/dark pairing, and an in-app visual theme editor with live preview
 - Create, duplicate, edit, import (JSON) and reveal-in-Finder for custom themes, stored as JSON in the app support directory and reloaded at startup
 - Full French / English translations applied via `data-i18n` attributes with English fallback
+- Native macOS Edit menu (Undo, Redo, Cut, Copy, Paste, Select All) so system editing shortcuts work in text inputs, plus a Find item (⌘F) that focuses the search field
 
 ### Changed
 
@@ -23,6 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Fixed
 
 - Dragging the custom title bar now moves the window (granted `core:window:allow-start-dragging`), matching native macOS behavior
+- Clearing the search (including the native `<input type="search">` clear button in WKWebView) now removes stale highlights immediately, cancelling any pending debounced query
 
 ### Accessibility
 
