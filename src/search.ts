@@ -343,11 +343,24 @@ export function createSearchController(
     return index;
   }
 
+  // WebKit (WKWebView) sometimes leaves the last CSS Custom Highlight glyph
+  // painted after it is removed from the registry — most visible when the final
+  // match is deleted (query goes 1 char → 0). Nudge an imperceptible repaint of
+  // the container so the stale paint is invalidated. No-op off the CSS path.
+  function forceHighlightRepaint(): void {
+    const style = container.style;
+    const prev = style.opacity;
+    style.opacity = prev === "0.999999" ? "0.999998" : "0.999999";
+    void container.offsetHeight;
+    style.opacity = prev;
+  }
+
   function clearHighlights(): void {
     if (supportsCSSHighlights) {
       const reg = (CSS as unknown as CSSWithHighlights).highlights;
       reg.delete(HIGHLIGHT_NAME);
       reg.delete(HIGHLIGHT_CURRENT_NAME);
+      forceHighlightRepaint();
     } else {
       clearMarkFallback(container);
     }
@@ -356,6 +369,9 @@ export function createSearchController(
   function applyHighlights(): void {
     if (supportsCSSHighlights) {
       applyCSSHighlights(ranges, currentIndex);
+      if (ranges.length === 0) {
+        forceHighlightRepaint();
+      }
       return;
     }
     clearMarkFallback(container);
@@ -468,6 +484,10 @@ export function createSearchController(
     index = null;
     ranges = [];
     currentIndex = -1;
+    // Re-sync to the live input: it is the source of truth. Loading a new
+    // document must not re-highlight a stale internal query (e.g. one the user
+    // already cleared from the field) on the freshly rendered content.
+    query = ui.input.value;
     clearHighlights();
     if (query) {
       recompute();

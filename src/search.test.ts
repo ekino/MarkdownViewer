@@ -201,12 +201,34 @@ describe("createSearchController", () => {
   it("re-evaluates after reset following DOM mutation", () => {
     const c = makeContainer("<p>foo</p>");
     const ui = makeUI();
+    ui.input.value = "foo";
     const ctrl = createSearchController(c, ui);
     ctrl.setQuery("foo");
     expect(ctrl.getState().total).toBe(1);
     c.innerHTML = "<p>foo bar foo</p>";
     ctrl.reset();
     expect(ctrl.getState().total).toBe(2);
+  });
+
+  it("reset() drops a stale query once the field is empty (document switch)", () => {
+    // Repro of the ghost-highlight bug: user searches in doc A, empties the
+    // field, then opens doc B. loadFile() calls reset(); it must not re-apply
+    // the old query to the freshly rendered document.
+    const c = makeContainer("<p>foo foo</p>");
+    const ui = makeUI();
+    ui.input.value = "foo";
+    const ctrl = createSearchController(c, ui);
+    ctrl.setQuery("foo");
+    expect(ctrl.getState().total).toBe(2);
+
+    // User clears the field, then a new document is rendered.
+    ui.input.value = "";
+    c.innerHTML = "<p>foo bar foo</p>";
+    ctrl.reset();
+
+    expect(ctrl.getState().total).toBe(0);
+    expect(ui.counter.textContent).toBe("");
+    expect(c.querySelectorAll("mark.mdv-search-hit")).toHaveLength(0);
   });
 
   it("recomputes when options change", () => {
@@ -314,5 +336,34 @@ describe("createSearchController (CSS Custom Highlight API path)", () => {
 
     expect(reg.size).toBe(0);
     expect(ctrl.getState().total).toBe(0);
+  });
+
+  it("clears highlights when a 1-char query is deleted to empty via input events", async () => {
+    vi.useFakeTimers();
+    try {
+      const { reg, createSearchController: create } =
+        await loadWithCSSHighlights();
+      const c = makeContainer("<p>eee</p>");
+      const ui = makeUI();
+      const ctrl = create(c, ui);
+
+      // Type one character; the debounced input handler applies highlights.
+      ui.input.value = "e";
+      ui.input.dispatchEvent(new Event("input"));
+      vi.advanceTimersByTime(100);
+      expect(reg.size).toBeGreaterThan(0);
+      expect(ctrl.getState().total).toBeGreaterThan(0);
+
+      // Delete it back to empty via a normal keyboard edit (input event only).
+      ui.input.value = "";
+      ui.input.dispatchEvent(new Event("input"));
+      vi.advanceTimersByTime(100);
+
+      expect(reg.size).toBe(0);
+      expect(ctrl.getState().total).toBe(0);
+      expect(ui.counter.textContent).toBe("");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
