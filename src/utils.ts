@@ -94,3 +94,17 @@ export function findReadme(entries: Entry[]): Entry | undefined {
     (e) => e.kind === "file" && e.name.toLowerCase() === "readme.md"
   );
 }
+
+export type RecentEntry = { path: string; kind: "file" | "folder" };
+
+/**
+ * Prepend an entry to the recents list, dropping any prior entry with the same
+ * path (most-recent-wins) and capping the list length.
+ */
+export function mergeRecent(
+  list: RecentEntry[],
+  entry: RecentEntry,
+  max: number
+): RecentEntry[] {
+  return [entry, ...list.filter((e) => e.path !== entry.path)].slice(0, max);
+}

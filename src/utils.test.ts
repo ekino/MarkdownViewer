@@ -7,7 +7,9 @@ import {
   classifyLink,
   parseMarkdownHref,
   findReadme,
+  mergeRecent,
 } from "./utils";
+import type { RecentEntry } from "./utils";
 
 describe("resolvePath", () => {
   it("resolves a simple relative path", () => {
@@ -229,5 +231,41 @@ describe("findReadme", () => {
   it("ignores directories named readme.md", () => {
     const entries = [{ name: "readme.md", kind: "directory" as const }];
     expect(findReadme(entries)).toBeUndefined();
+  });
+});
+
+describe("mergeRecent", () => {
+  const f = (path: string): RecentEntry => ({ path, kind: "file" });
+
+  it("prepends the new entry", () => {
+    expect(mergeRecent([f("/a"), f("/b")], f("/c"), 10)).toEqual([
+      f("/c"),
+      f("/a"),
+      f("/b"),
+    ]);
+  });
+
+  it("moves an existing path to the front without duplicating", () => {
+    expect(mergeRecent([f("/a"), f("/b"), f("/c")], f("/c"), 10)).toEqual([
+      f("/c"),
+      f("/a"),
+      f("/b"),
+    ]);
+  });
+
+  it("caps the list at max, dropping the oldest", () => {
+    const result = mergeRecent([f("/a"), f("/b"), f("/c")], f("/d"), 3);
+    expect(result).toEqual([f("/d"), f("/a"), f("/b")]);
+  });
+
+  it("dedupes by path regardless of kind", () => {
+    const folder: RecentEntry = { path: "/a", kind: "folder" };
+    expect(mergeRecent([f("/a")], folder, 10)).toEqual([folder]);
+  });
+
+  it("does not mutate the input list", () => {
+    const list = [f("/a")];
+    mergeRecent(list, f("/b"), 10);
+    expect(list).toEqual([f("/a")]);
   });
 });
