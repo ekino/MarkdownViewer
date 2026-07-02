@@ -104,6 +104,13 @@
   "editor.var.search-hit": "Search highlight",
   "editor.var.search-hit-active": "Active search hit",
 
+  "updater.downloading": "Downloading update…",
+  "updater.restart": "Restart to update ({version})",
+  "updater.restartAction": "Restart",
+  "updater.upToDate": "There are currently no updates available.",
+  "updater.error": "Update check failed.",
+  "updater.dismiss": "Dismiss",
+
   "mermaid.error": "Mermaid syntax error — showing source",
   "mermaid.close": "Close (Esc)",
   "code.copy": "Copy",

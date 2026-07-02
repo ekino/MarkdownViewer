@@ -12,6 +12,8 @@
     "fs:allow-read-text-file",
     "fs:allow-read-dir",
     "opener:default",
+    "updater:default",
+    "process:default",
     {
       "identifier": "fs:scope",
       "allow": [{ "path": "**" }, { "path": "$HOME/**" }, { "path": "/**" }]

@@ -223,6 +223,8 @@ pub fn run(path_arg: Option<String>) {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(move |app| {
             // Build native menu
             let open_folder = MenuItemBuilder::with_id("open_folder", "Open Folder…")
@@ -237,12 +239,17 @@ pub fn run(path_arg: Option<String>) {
                 .accelerator("CmdOrCtrl+F")
                 .build(app)?;
 
+            let check_updates =
+                MenuItemBuilder::with_id("check_updates", "Check for Updates…").build(app)?;
+
             let app_name = app.package_info().name.clone();
 
             let menu = MenuBuilder::new(app)
                 .items(&[
                     &SubmenuBuilder::new(app, &app_name)
                         .about(None)
+                        .separator()
+                        .items(&[&check_updates])
                         .separator()
                         .items(&[&preferences])
                         .separator()
@@ -286,6 +293,9 @@ pub fn run(path_arg: Option<String>) {
                     }
                     "find" => {
                         let _ = app_handle.emit("menu-find", ());
+                    }
+                    "check_updates" => {
+                        let _ = app_handle.emit("menu-check-updates", ());
                     }
                     _ => {}
                 }

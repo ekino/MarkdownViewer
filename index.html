@@ -1834,6 +1834,70 @@
       max-width: 100%;
       margin: 0;
     }
+
+    /* Update toast (auto-updater) */
+    #update-toast {
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+      z-index: 3000;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      max-width: 360px;
+      padding: 12px 14px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+      font-size: 13px;
+      color: var(--text);
+    }
+    #update-toast[hidden] {
+      display: none;
+    }
+    #update-toast-icon.update-toast-spinner {
+      width: 16px;
+      height: 16px;
+      flex: none;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: update-spin 0.7s linear infinite;
+    }
+    @keyframes update-spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+    #update-toast-text {
+      flex: 1;
+      line-height: 1.4;
+    }
+    #update-toast-action {
+      flex: none;
+      border: none;
+      background: var(--accent);
+      color: #fff;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    #update-toast-action[hidden] {
+      display: none;
+    }
+    #update-toast-dismiss {
+      flex: none;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 18px;
+      line-height: 1;
+      padding: 0 2px;
+    }
     </style>
   </head>
   <body>
@@ -2366,6 +2430,20 @@
           </button>
         </div>
       </div>
+    </div>
+
+    <div id="update-toast" role="status" aria-live="polite" hidden>
+      <span id="update-toast-icon" aria-hidden="true"></span>
+      <span id="update-toast-text"></span>
+      <button type="button" id="update-toast-action" hidden></button>
+      <button
+        type="button"
+        id="update-toast-dismiss"
+        aria-label="Dismiss"
+        data-i18n-title="updater.dismiss"
+      >
+        ×
+      </button>
     </div>
 
     <script type="module" src="/src/main.ts"></script>

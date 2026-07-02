@@ -6,7 +6,9 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { readDir, readTextFile } from "@tauri-apps/plugin-fs";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { relaunch } from "@tauri-apps/plugin-process";
 import { load } from "@tauri-apps/plugin-store";
+import { check as checkUpdate } from "@tauri-apps/plugin-updater";
 import { confirmDialog } from "./confirm-dialog";
 import { addCopyButtons, addImageLightbox } from "./dom";
 import { trapFocus, type FocusTrap } from "./focus-trap";
@@ -72,6 +74,11 @@ import {
   toHexForPicker,
 } from "./theme-editor";
 import { createSearchController, type SearchController } from "./search";
+import {
+  createUpdaterController,
+  type UpdateHandle,
+  type UpdaterController,
+} from "./updater";
 import type { Entry } from "./utils";
 import {
   classifyLink,
@@ -1424,6 +1431,16 @@ async function init(): Promise<void> {
   appWindow.listen("menu-find", () => {
     focusSearch();
   });
+
+  const updater: UpdaterController = createUpdaterController({
+    check: () => checkUpdate() as Promise<UpdateHandle | null>,
+    relaunch: () => relaunch(),
+  });
+  appWindow.listen("menu-check-updates", () => {
+    void updater.check({ silent: false });
+  });
+  // Non-blocking background check shortly after launch.
+  void updater.check({ silent: true });
 
   // Cold-start: pull anything the backend buffered (CLI arg or RunEvent::Opened
   // that fired before our listener was registered). A pending open wins over

@@ -104,6 +104,13 @@
   "editor.var.search-hit": "Résultat de recherche",
   "editor.var.search-hit-active": "Résultat actif",
 
+  "updater.downloading": "Téléchargement de la mise à jour…",
+  "updater.restart": "Relancer pour mettre à jour ({version})",
+  "updater.restartAction": "Relancer",
+  "updater.upToDate": "Aucune mise à jour n'est disponible pour le moment.",
+  "updater.error": "Échec de la vérification des mises à jour.",
+  "updater.dismiss": "Fermer",
+
   "mermaid.error": "Erreur de syntaxe Mermaid — affichage de la source",
   "mermaid.close": "Fermer (Échap)",
   "code.copy": "Copier",
