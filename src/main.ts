@@ -8,6 +8,7 @@ import { readDir, readTextFile } from "@tauri-apps/plugin-fs";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { load } from "@tauri-apps/plugin-store";
 import { confirmDialog } from "./confirm-dialog";
+import { createDebugOverlay } from "./debug-overlay";
 import { addCopyButtons, addImageLightbox } from "./dom";
 import { trapFocus, type FocusTrap } from "./focus-trap";
 import {
@@ -392,6 +393,15 @@ const breadcrumb = document.getElementById("breadcrumb") as HTMLDivElement;
 const markdownEl = document.getElementById("markdown") as HTMLDivElement;
 const emptyState = document.getElementById("empty-state") as HTMLDivElement;
 const contentEl = document.getElementById("content") as HTMLDivElement;
+const contentLoading = document.getElementById(
+  "content-loading"
+) as HTMLDivElement;
+const slowReadNotice = document.getElementById(
+  "slow-read-notice"
+) as HTMLDivElement;
+const slowReadDismiss = document.getElementById(
+  "slow-read-dismiss"
+) as HTMLButtonElement;
 const openBtn = document.getElementById("open-btn") as HTMLButtonElement;
 const examplesBtn = document.getElementById(
   "examples-btn"
@@ -466,6 +476,10 @@ async function openFileFromPath(filePath: string): Promise<void> {
   await setRootPath(parentDir, fileName);
 }
 
+// --- Debug HUD ---
+
+const debugOverlay = createDebugOverlay();
+
 // --- Search ---
 
 let searchController: SearchController | null = null;
@@ -513,6 +527,11 @@ function handleGlobalSearchShortcut(e: KeyboardEvent): void {
     return;
   }
   const key = e.key.toLowerCase();
+  if (key === "d" && e.shiftKey) {
+    e.preventDefault();
+    debugOverlay.toggle();
+    return;
+  }
   if (key === "f" && !searchInput.disabled) {
     e.preventDefault();
     focusSearch();
@@ -1595,23 +1614,97 @@ function resolveImagePaths(container: HTMLElement, filePath: string): void {
   }
 }
 
+// Reads are slow on cloud-synced folders (OneDrive/iCloud materialize
+// "online-only" files on first access). Cache by path+mtime so re-opening a
+// document is instant, and surface a one-time notice when a real read is slow.
+const SLOW_READ_MS = 600;
+const docCache = new Map<string, { mtime: number; text: string }>();
+let slowReadDismissed = false;
+let loadingTimer: ReturnType<typeof setTimeout> | null = null;
+
+function showLoadingSoon(): void {
+  // Small delay so instant (cached) reads never flash a spinner.
+  loadingTimer = setTimeout(() => {
+    contentLoading.hidden = false;
+  }, 150);
+}
+
+function hideLoading(): void {
+  if (loadingTimer !== null) {
+    clearTimeout(loadingTimer);
+    loadingTimer = null;
+  }
+  contentLoading.hidden = true;
+}
+
+slowReadDismiss.addEventListener("click", () => {
+  slowReadNotice.hidden = true;
+  slowReadDismissed = true;
+});
+
+async function readDocumentText(
+  fullPath: string
+): Promise<{ text: string; slow: boolean }> {
+  let mtime: number | null = null;
+  try {
+    mtime = await invoke<number>("document_mtime", { path: fullPath });
+  } catch {
+    mtime = null;
+  }
+  const cached = docCache.get(fullPath);
+  if (cached && mtime !== null && cached.mtime === mtime) {
+    return { text: cached.text, slow: false };
+  }
+  const start = performance.now();
+  const text = await invoke<string>("read_document", { path: fullPath });
+  const slow = performance.now() - start >= SLOW_READ_MS;
+  if (mtime !== null) {
+    docCache.set(fullPath, { mtime, text });
+  }
+  return { text, slow };
+}
+
 async function loadFile(filePath: string): Promise<void> {
   try {
     const fullPath = `${rootPath}/${filePath}`;
-    const text = await readTextFile(fullPath);
+    // IPC round-trip probe — only when the debug HUD is open, so normal use
+    // doesn't pay for an extra invoke on every document open.
+    const tPing0 = performance.now();
+    if (debugOverlay.isVisible()) {
+      await invoke("ping");
+    }
+    const tPing1 = performance.now();
+
+    showLoadingSoon();
+    const tRead0 = performance.now();
+    let text: string;
+    let slowRead: boolean;
+    try {
+      ({ text, slow: slowRead } = await readDocumentText(fullPath));
+    } finally {
+      hideLoading();
+    }
+    const tRead1 = performance.now();
+
+    slowReadNotice.hidden = !(slowRead && !slowReadDismissed);
 
     activeFile = filePath;
     emptyState.style.display = "none";
     markdownEl.style.display = "block";
     contentEl.classList.remove("empty");
 
+    const t0 = performance.now();
     markdownEl.innerHTML = parseMarkdown(text);
+    const t1 = performance.now();
     resolveImagePaths(markdownEl, fullPath);
     contentEl.scrollTop = 0;
+    const t2 = performance.now();
 
     await renderMermaidDiagrams();
+    const t3 = performance.now();
     addCopyButtons(markdownEl);
     addImageLightbox(markdownEl, openImageOverlay);
+    const t4 = performance.now();
 
     const fileDir = filePath.split("/").slice(0, -1);
     if (fileDir.join("/") !== currentPath.join("/")) {
@@ -1622,11 +1715,27 @@ async function loadFile(filePath: string): Promise<void> {
     const currentDir = filePath.split("/").slice(0, -1);
     interceptLinks(currentDir);
     highlightSidebar();
+    const t5 = performance.now();
     buildOutline();
+    const t6 = performance.now();
 
     titlebarFilename.textContent = filePath.split("/").pop() ?? "";
     setSearchEnabled(true);
     searchController?.reset();
+
+    debugOverlay.recordOpen({
+      file: filePath.split("/").pop() ?? filePath,
+      total: t6 - tPing0,
+      phases: {
+        ping: tPing1 - tPing0,
+        read: tRead1 - tRead0,
+        parse: t1 - t0,
+        images: t2 - t1,
+        mermaid: t3 - t2,
+        dom: t4 - t3,
+        outline: t6 - t5,
+      },
+    });
   } catch (e) {
     console.error("Failed to load file:", filePath, e);
   }

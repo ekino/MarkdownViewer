@@ -107,5 +107,7 @@
   "mermaid.error": "Erreur de syntaxe Mermaid — affichage de la source",
   "mermaid.close": "Fermer (Échap)",
   "code.copy": "Copier",
-  "code.copied": "Copié !"
+  "code.copied": "Copié !",
+  "slowRead.message": "Ce fichier a mis longtemps à s'ouvrir. Ce dossier semble synchronisé dans le cloud (OneDrive, iCloud…) : les fichiers « en ligne uniquement » se téléchargent à la première lecture. Déplacez vos documents dans un dossier local pour accélérer.",
+  "slowRead.dismiss": "Masquer"
 }

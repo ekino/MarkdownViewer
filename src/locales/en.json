@@ -107,5 +107,7 @@
   "mermaid.error": "Mermaid syntax error — showing source",
   "mermaid.close": "Close (Esc)",
   "code.copy": "Copy",
-  "code.copied": "Copied!"
+  "code.copied": "Copied!",
+  "slowRead.message": "This file took a long time to open. This folder looks cloud-synced (OneDrive, iCloud…): \"online-only\" files are downloaded on first read. Move your documents to a local folder to speed things up.",
+  "slowRead.dismiss": "Dismiss"
 }
