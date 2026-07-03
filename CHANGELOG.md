@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.11.0](https://github.com/ekino/MarkdownViewer/releases/tag/v0.11.0) - 2026-07-03
+
+### Added
+
+- Native File and View menus matching standard macOS apps: File (Open File… ⌘O, Open Folder… ⇧⌘O, Open Recent ▸, Print… ⌘P, Export as PDF… ⇧⌘S, Close Window) and View (Toggle Dark Mode)
+- Open Recent submenu, dynamically populated from the last 10 opened documents (deduped, most-recent-first), recorded on top-level opens (picker, file association, CLI, restore)
+- In-memory document cache keyed by path + mtime so re-opening a document is instant, without serving stale content after an external edit
+- Loading spinner (shown after a 150ms delay to avoid flashing on fast reads) and a one-time dismissible notice when an uncached read exceeds 600ms, explaining the likely cloud-sync cause (FR + EN)
+- Debug HUD (⌘/Ctrl+Shift+D) showing live FPS and per-phase document-open timings (ipc, read, parse, images, mermaid, dom, outline, total) with click-to-copy
+
+### Changed
+
+- Documents are read through a dedicated async Rust command (`read_document`, confined to home/resource dirs with canonicalization) instead of the fs plugin, keeping slow reads off the UI thread — fixes multi-second freezes when opening cloud-synced (e.g. OneDrive on-demand) files
+
+### Fixed
+
+- Stop lingering search highlights when switching documents (reset now reads the live input value) and when clearing the last character (1→0) on the WKWebView CSS Custom Highlight path
+
 ## [0.10.0](https://github.com/ekino/MarkdownViewer/releases/tag/v0.10.0) - 2026-07-01
 
 ### Added
