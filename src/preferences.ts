@@ -40,6 +40,11 @@ export const MIN_SIDEBAR_WIDTH = 160;
 export const MAX_SIDEBAR_WIDTH = 640;
 export const DEFAULT_SIDEBAR_WIDTH = 260;
 
+export const OUTLINE_WIDTH_KEY = "outlineWidth";
+export const MIN_OUTLINE_WIDTH = 160;
+export const MAX_OUTLINE_WIDTH = 480;
+export const DEFAULT_OUTLINE_WIDTH = 220;
+
 export const FONT_WEIGHT_VALUES = [
   "300",
   "400",
@@ -192,6 +197,23 @@ export function resolveInitialSidebarWidth(value: unknown): number {
 
 export function applySidebarWidthToDOM(root: HTMLElement, px: number): void {
   root.style.setProperty("--sidebar-width", `${px}px`);
+}
+
+export function isValidOutlineWidth(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= MIN_OUTLINE_WIDTH &&
+    value <= MAX_OUTLINE_WIDTH
+  );
+}
+
+export function resolveInitialOutlineWidth(value: unknown): number {
+  return isValidOutlineWidth(value) ? value : DEFAULT_OUTLINE_WIDTH;
+}
+
+export function applyOutlineWidthToDOM(root: HTMLElement, px: number): void {
+  root.style.setProperty("--outline-width", `${px}px`);
 }
 
 export function setSegmentActive(group: HTMLElement, value: string): void {

@@ -24,8 +24,11 @@ import {
   applyFontWeightToDOM,
   applyCustomFontSizeToDOM,
   applySidebarWidthToDOM,
+  applyOutlineWidthToDOM,
   resolveInitialSidebarWidth,
   isValidSidebarWidth,
+  resolveInitialOutlineWidth,
+  isValidOutlineWidth,
   effectiveFontSizePx,
   PRESET_FONT_SIZE_PX,
   MIN_CUSTOM_FONT_SIZE,
@@ -33,6 +36,9 @@ import {
   MIN_SIDEBAR_WIDTH,
   MAX_SIDEBAR_WIDTH,
   DEFAULT_SIDEBAR_WIDTH,
+  MIN_OUTLINE_WIDTH,
+  MAX_OUTLINE_WIDTH,
+  DEFAULT_OUTLINE_WIDTH,
 } from "./preferences";
 
 describe("resolveDark", () => {
@@ -401,5 +407,43 @@ describe("sidebar width", () => {
     const root = document.createElement("html");
     applySidebarWidthToDOM(root, 420);
     expect(root.style.getPropertyValue("--sidebar-width")).toBe("420px");
+  });
+});
+
+describe("outline width", () => {
+  it("isValidOutlineWidth accepts values inside the range", () => {
+    expect(isValidOutlineWidth(MIN_OUTLINE_WIDTH)).toBe(true);
+    expect(isValidOutlineWidth(280)).toBe(true);
+    expect(isValidOutlineWidth(MAX_OUTLINE_WIDTH)).toBe(true);
+  });
+
+  it("isValidOutlineWidth rejects out-of-range or non-numbers", () => {
+    expect(isValidOutlineWidth(MIN_OUTLINE_WIDTH - 1)).toBe(false);
+    expect(isValidOutlineWidth(MAX_OUTLINE_WIDTH + 1)).toBe(false);
+    expect(isValidOutlineWidth(NaN)).toBe(false);
+    expect(isValidOutlineWidth(Infinity)).toBe(false);
+    expect(isValidOutlineWidth("280")).toBe(false);
+    expect(isValidOutlineWidth(null)).toBe(false);
+    expect(isValidOutlineWidth(undefined)).toBe(false);
+  });
+
+  it("resolveInitialOutlineWidth keeps a valid value", () => {
+    expect(resolveInitialOutlineWidth(260)).toBe(260);
+    expect(resolveInitialOutlineWidth(MIN_OUTLINE_WIDTH)).toBe(
+      MIN_OUTLINE_WIDTH
+    );
+  });
+
+  it("resolveInitialOutlineWidth falls back to the default for bad values", () => {
+    expect(resolveInitialOutlineWidth(null)).toBe(DEFAULT_OUTLINE_WIDTH);
+    expect(resolveInitialOutlineWidth("260")).toBe(DEFAULT_OUTLINE_WIDTH);
+    expect(resolveInitialOutlineWidth(10)).toBe(DEFAULT_OUTLINE_WIDTH);
+    expect(resolveInitialOutlineWidth(10000)).toBe(DEFAULT_OUTLINE_WIDTH);
+  });
+
+  it("applyOutlineWidthToDOM sets --outline-width in px", () => {
+    const root = document.createElement("html");
+    applyOutlineWidthToDOM(root, 300);
+    expect(root.style.getPropertyValue("--outline-width")).toBe("300px");
   });
 });
