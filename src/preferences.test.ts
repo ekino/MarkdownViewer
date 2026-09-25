@@ -23,10 +23,22 @@ import {
   applyCodeFontToDOM,
   applyFontWeightToDOM,
   applyCustomFontSizeToDOM,
+  applySidebarWidthToDOM,
+  applyOutlineWidthToDOM,
+  resolveInitialSidebarWidth,
+  isValidSidebarWidth,
+  resolveInitialOutlineWidth,
+  isValidOutlineWidth,
   effectiveFontSizePx,
   PRESET_FONT_SIZE_PX,
   MIN_CUSTOM_FONT_SIZE,
   MAX_CUSTOM_FONT_SIZE,
+  MIN_SIDEBAR_WIDTH,
+  MAX_SIDEBAR_WIDTH,
+  DEFAULT_SIDEBAR_WIDTH,
+  MIN_OUTLINE_WIDTH,
+  MAX_OUTLINE_WIDTH,
+  DEFAULT_OUTLINE_WIDTH,
 } from "./preferences";
 
 describe("resolveDark", () => {
@@ -357,5 +369,81 @@ describe("resolveInitialFinderOpenPref", () => {
     expect(isFinderOpenPref("reuse")).toBe(true);
     expect(isFinderOpenPref("newwindow")).toBe(false);
     expect(isFinderOpenPref("")).toBe(false);
+  });
+});
+
+describe("sidebar width", () => {
+  it("isValidSidebarWidth accepts values inside the range", () => {
+    expect(isValidSidebarWidth(MIN_SIDEBAR_WIDTH)).toBe(true);
+    expect(isValidSidebarWidth(320)).toBe(true);
+    expect(isValidSidebarWidth(MAX_SIDEBAR_WIDTH)).toBe(true);
+  });
+
+  it("isValidSidebarWidth rejects out-of-range or non-numbers", () => {
+    expect(isValidSidebarWidth(MIN_SIDEBAR_WIDTH - 1)).toBe(false);
+    expect(isValidSidebarWidth(MAX_SIDEBAR_WIDTH + 1)).toBe(false);
+    expect(isValidSidebarWidth(NaN)).toBe(false);
+    expect(isValidSidebarWidth(Infinity)).toBe(false);
+    expect(isValidSidebarWidth("320")).toBe(false);
+    expect(isValidSidebarWidth(null)).toBe(false);
+    expect(isValidSidebarWidth(undefined)).toBe(false);
+  });
+
+  it("resolveInitialSidebarWidth keeps a valid value", () => {
+    expect(resolveInitialSidebarWidth(300)).toBe(300);
+    expect(resolveInitialSidebarWidth(MIN_SIDEBAR_WIDTH)).toBe(
+      MIN_SIDEBAR_WIDTH
+    );
+  });
+
+  it("resolveInitialSidebarWidth falls back to the default for bad values", () => {
+    expect(resolveInitialSidebarWidth(null)).toBe(DEFAULT_SIDEBAR_WIDTH);
+    expect(resolveInitialSidebarWidth("300")).toBe(DEFAULT_SIDEBAR_WIDTH);
+    expect(resolveInitialSidebarWidth(10)).toBe(DEFAULT_SIDEBAR_WIDTH);
+    expect(resolveInitialSidebarWidth(10000)).toBe(DEFAULT_SIDEBAR_WIDTH);
+  });
+
+  it("applySidebarWidthToDOM sets --sidebar-width in px", () => {
+    const root = document.createElement("html");
+    applySidebarWidthToDOM(root, 420);
+    expect(root.style.getPropertyValue("--sidebar-width")).toBe("420px");
+  });
+});
+
+describe("outline width", () => {
+  it("isValidOutlineWidth accepts values inside the range", () => {
+    expect(isValidOutlineWidth(MIN_OUTLINE_WIDTH)).toBe(true);
+    expect(isValidOutlineWidth(280)).toBe(true);
+    expect(isValidOutlineWidth(MAX_OUTLINE_WIDTH)).toBe(true);
+  });
+
+  it("isValidOutlineWidth rejects out-of-range or non-numbers", () => {
+    expect(isValidOutlineWidth(MIN_OUTLINE_WIDTH - 1)).toBe(false);
+    expect(isValidOutlineWidth(MAX_OUTLINE_WIDTH + 1)).toBe(false);
+    expect(isValidOutlineWidth(NaN)).toBe(false);
+    expect(isValidOutlineWidth(Infinity)).toBe(false);
+    expect(isValidOutlineWidth("280")).toBe(false);
+    expect(isValidOutlineWidth(null)).toBe(false);
+    expect(isValidOutlineWidth(undefined)).toBe(false);
+  });
+
+  it("resolveInitialOutlineWidth keeps a valid value", () => {
+    expect(resolveInitialOutlineWidth(260)).toBe(260);
+    expect(resolveInitialOutlineWidth(MIN_OUTLINE_WIDTH)).toBe(
+      MIN_OUTLINE_WIDTH
+    );
+  });
+
+  it("resolveInitialOutlineWidth falls back to the default for bad values", () => {
+    expect(resolveInitialOutlineWidth(null)).toBe(DEFAULT_OUTLINE_WIDTH);
+    expect(resolveInitialOutlineWidth("260")).toBe(DEFAULT_OUTLINE_WIDTH);
+    expect(resolveInitialOutlineWidth(10)).toBe(DEFAULT_OUTLINE_WIDTH);
+    expect(resolveInitialOutlineWidth(10000)).toBe(DEFAULT_OUTLINE_WIDTH);
+  });
+
+  it("applyOutlineWidthToDOM sets --outline-width in px", () => {
+    const root = document.createElement("html");
+    applyOutlineWidthToDOM(root, 300);
+    expect(root.style.getPropertyValue("--outline-width")).toBe("300px");
   });
 });

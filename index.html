@@ -270,6 +270,55 @@
       overflow: hidden;
     }
 
+    /* Drag handle that resizes the left sidebar. It sits between the sidebar's
+       right border and the content area as a narrow invisible strip that lights
+       up on hover/while dragging. */
+    #sidebar-resizer {
+      flex: 0 0 6px;
+      cursor: col-resize;
+      background: transparent;
+      border-left: 1px solid transparent;
+      transition:
+        background 0.15s,
+        border-color 0.15s;
+    }
+
+    #sidebar-resizer:hover,
+    body.resizing-sidebar #sidebar-resizer {
+      background: var(--accent-light);
+      border-left-color: var(--accent);
+    }
+
+    body.resizing-sidebar {
+      cursor: col-resize;
+      user-select: none;
+    }
+
+    /* Drag handle that resizes the right outline panel. Mirrors the sidebar
+       resizer: it sits just left of the outline's border and is hidden whenever
+       the outline itself is hidden. */
+    #outline-resizer {
+      flex: 0 0 6px;
+      cursor: col-resize;
+      background: transparent;
+      border-right: 1px solid transparent;
+      transition:
+        background 0.15s,
+        border-color 0.15s;
+      display: none;
+    }
+
+    #outline-resizer:hover,
+    body.resizing-outline #outline-resizer {
+      background: var(--accent-light);
+      border-right-color: var(--accent);
+    }
+
+    body.resizing-outline {
+      cursor: col-resize;
+      user-select: none;
+    }
+
     #sidebar-header {
       padding: 16px;
       border-bottom: 1px solid var(--border);
@@ -1139,7 +1188,8 @@
       );
     }
 
-    html[data-outline="hidden"] #outline {
+    html[data-outline="hidden"] #outline,
+    html[data-outline="hidden"] #outline-resizer {
       display: none !important;
     }
 
@@ -1780,6 +1830,8 @@
 
       #sidebar,
       #outline,
+      #sidebar-resizer,
+      #outline-resizer,
       #empty-state,
       .copy-btn,
       .mermaid-fullscreen-btn,
@@ -1845,6 +1897,8 @@
     /* PDF export mode — applied via JS before createPDF capture */
     body.print-mode #sidebar,
     body.print-mode #outline,
+    body.print-mode #sidebar-resizer,
+    body.print-mode #outline-resizer,
     body.print-mode #empty-state,
     body.print-mode .copy-btn,
     body.print-mode .mermaid-fullscreen-btn {
@@ -2052,6 +2106,8 @@
         <div id="file-list"></div>
       </div>
 
+      <div id="sidebar-resizer" aria-hidden="true"></div>
+
       <div id="content" class="empty">
         <div id="empty-state">
           <h2 data-i18n="app.name">Markdown Viewer</h2>
@@ -2082,6 +2138,8 @@
           <div class="content-loading-spinner"></div>
         </div>
       </div>
+
+      <div id="outline-resizer" aria-hidden="true"></div>
 
       <div id="outline">
         <div id="outline-title" data-i18n="outline.title">On this page</div>

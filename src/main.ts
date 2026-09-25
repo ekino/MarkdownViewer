@@ -27,24 +27,36 @@ import {
   BODY_FONT_KEY,
   CODE_FONT_KEY,
   CUSTOM_FONT_SIZE_KEY,
+  DEFAULT_OUTLINE_WIDTH,
+  DEFAULT_SIDEBAR_WIDTH,
   FONTSIZE_KEY,
   FONT_WEIGHT_KEY,
   MAX_CUSTOM_FONT_SIZE,
+  MAX_OUTLINE_WIDTH,
+  MAX_SIDEBAR_WIDTH,
   MIN_CUSTOM_FONT_SIZE,
+  MIN_OUTLINE_WIDTH,
+  MIN_SIDEBAR_WIDTH,
   FINDER_OPEN_KEY,
   OUTLINE_PREF_KEY,
+  OUTLINE_WIDTH_KEY,
+  SIDEBAR_WIDTH_KEY,
   applyBodyFontToDOM,
   applyCodeFontToDOM,
   applyCustomFontSizeToDOM,
   applyFontSizeToDOM,
   applyFontWeightToDOM,
   applyOutlinePrefToDOM,
+  applyOutlineWidthToDOM,
+  applySidebarWidthToDOM,
   resolveInitialCustomFontSize,
   resolveInitialFontFamily,
   resolveInitialFontSize,
   resolveInitialFinderOpenPref,
   resolveInitialFontWeight,
   resolveInitialOutlinePref,
+  resolveInitialOutlineWidth,
+  resolveInitialSidebarWidth,
   setSegmentActive,
   type FinderOpenPref,
   type FontSize,
@@ -158,6 +170,12 @@ async function initTheme(): Promise<void> {
   const savedOutline = resolveInitialOutlinePref(
     await store.get(OUTLINE_PREF_KEY)
   );
+  const savedSidebarWidth = resolveInitialSidebarWidth(
+    await store.get(SIDEBAR_WIDTH_KEY)
+  );
+  const savedOutlineWidth = resolveInitialOutlineWidth(
+    await store.get(OUTLINE_WIDTH_KEY)
+  );
 
   const storeCustoms = sanitizeCustomThemes(
     await store.get(CUSTOM_THEMES_KEY)
@@ -192,6 +210,8 @@ async function initTheme(): Promise<void> {
   applyActiveTheme();
   applyFontSize(savedFontSize);
   applyOutlinePref(savedOutline);
+  applySidebarWidthToDOM(document.documentElement, savedSidebarWidth);
+  applyOutlineWidthToDOM(document.documentElement, savedOutlineWidth);
   applyBodyFontToDOM(document.documentElement, currentBodyFont);
   applyCodeFontToDOM(document.documentElement, currentCodeFont);
   applyFontWeightToDOM(document.documentElement, currentFontWeight);
@@ -432,6 +452,9 @@ const examplesBtn = document.getElementById(
 ) as HTMLButtonElement;
 const outlineEl = document.getElementById("outline") as HTMLDivElement;
 const outlineNav = document.getElementById("outline-nav") as HTMLElement;
+const outlineResizer = document.getElementById(
+  "outline-resizer"
+) as HTMLDivElement;
 const titlebarFilename = document.getElementById(
   "titlebar-filename"
 ) as HTMLSpanElement;
@@ -456,6 +479,11 @@ const searchOptDiacritics = document.getElementById(
 const searchOptWholeWord = document.getElementById(
   "search-opt-wholeword"
 ) as HTMLInputElement;
+
+const sidebarEl = document.getElementById("sidebar") as HTMLDivElement;
+const sidebarResizer = document.getElementById(
+  "sidebar-resizer"
+) as HTMLDivElement;
 
 const appWindow = getCurrentWindow();
 
@@ -664,6 +692,121 @@ function initSearch(): void {
   searchOptWholeWord.addEventListener("change", applySearchOptions);
 
   document.addEventListener("keydown", handleGlobalSearchShortcut);
+}
+
+// --- Sidebar resizing ---
+
+let sidebarDragging = false;
+let sidebarDragStartX = 0;
+let sidebarDragStartWidth = 0;
+
+function currentSidebarWidth(): number {
+  return sidebarEl.getBoundingClientRect().width;
+}
+
+function setSidebarWidth(px: number): void {
+  const clamped = Math.min(
+    MAX_SIDEBAR_WIDTH,
+    Math.max(MIN_SIDEBAR_WIDTH, px)
+  );
+  applySidebarWidthToDOM(document.documentElement, clamped);
+}
+
+function initSidebarResizer(): void {
+  sidebarResizer.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    // Capture so moves/up keep firing even if the cursor leaves the window.
+    sidebarResizer.setPointerCapture(e.pointerId);
+    sidebarDragging = true;
+    sidebarDragStartX = e.clientX;
+    sidebarDragStartWidth = currentSidebarWidth();
+    document.body.classList.add("resizing-sidebar");
+  });
+
+  sidebarResizer.addEventListener("pointermove", (e) => {
+    if (!sidebarDragging) return;
+    setSidebarWidth(sidebarDragStartWidth + (e.clientX - sidebarDragStartX));
+  });
+
+  function endSidebarDrag(): void {
+    if (!sidebarDragging) return;
+    sidebarDragging = false;
+    document.body.classList.remove("resizing-sidebar");
+  }
+
+  sidebarResizer.addEventListener("pointerup", async (e) => {
+    if (!sidebarDragging) return;
+    sidebarResizer.releasePointerCapture(e.pointerId);
+    endSidebarDrag();
+    await savePref(SIDEBAR_WIDTH_KEY, Math.round(currentSidebarWidth()));
+  });
+
+  sidebarResizer.addEventListener("pointercancel", () => {
+    endSidebarDrag();
+  });
+
+  sidebarResizer.addEventListener("dblclick", async () => {
+    setSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
+    await savePref(SIDEBAR_WIDTH_KEY, DEFAULT_SIDEBAR_WIDTH);
+  });
+}
+
+// --- Outline resizing ---
+
+let outlineDragging = false;
+let outlineDragStartX = 0;
+let outlineDragStartWidth = 0;
+
+function currentOutlineWidth(): number {
+  return outlineEl.getBoundingClientRect().width;
+}
+
+function setOutlineWidth(px: number): void {
+  const clamped = Math.min(
+    MAX_OUTLINE_WIDTH,
+    Math.max(MIN_OUTLINE_WIDTH, px)
+  );
+  applyOutlineWidthToDOM(document.documentElement, clamped);
+}
+
+function initOutlineResizer(): void {
+  outlineResizer.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    // Capture so moves/up keep firing even if the cursor leaves the window.
+    outlineResizer.setPointerCapture(e.pointerId);
+    outlineDragging = true;
+    outlineDragStartX = e.clientX;
+    outlineDragStartWidth = currentOutlineWidth();
+    document.body.classList.add("resizing-outline");
+  });
+
+  outlineResizer.addEventListener("pointermove", (e) => {
+    if (!outlineDragging) return;
+    // The handle sits on the outline's left edge: dragging right shrinks it.
+    setOutlineWidth(outlineDragStartWidth - (e.clientX - outlineDragStartX));
+  });
+
+  function endOutlineDrag(): void {
+    if (!outlineDragging) return;
+    outlineDragging = false;
+    document.body.classList.remove("resizing-outline");
+  }
+
+  outlineResizer.addEventListener("pointerup", async (e) => {
+    if (!outlineDragging) return;
+    outlineResizer.releasePointerCapture(e.pointerId);
+    endOutlineDrag();
+    await savePref(OUTLINE_WIDTH_KEY, Math.round(currentOutlineWidth()));
+  });
+
+  outlineResizer.addEventListener("pointercancel", () => {
+    endOutlineDrag();
+  });
+
+  outlineResizer.addEventListener("dblclick", async () => {
+    setOutlineWidth(DEFAULT_OUTLINE_WIDTH);
+    await savePref(OUTLINE_WIDTH_KEY, DEFAULT_OUTLINE_WIDTH);
+  });
 }
 
 // --- Preferences modal ---
@@ -1519,6 +1662,8 @@ async function init(): Promise<void> {
   await initTheme();
   initSearch();
   initPreferences();
+  initSidebarResizer();
+  initOutlineResizer();
 
   // Runtime opens (hot-start file association, "Open With", CLI events)
   appWindow.listen<string>("open-folder", (event) => {
@@ -1922,10 +2067,12 @@ function buildOutline(): void {
 
   if (headings.length === 0) {
     outlineEl.style.display = "none";
+    outlineResizer.style.display = "none";
     return;
   }
 
   outlineEl.style.display = "block";
+  outlineResizer.style.display = "block";
   const items: { el: HTMLAnchorElement; heading: Element }[] = [];
 
   for (const h of headings) {

@@ -35,6 +35,16 @@ export const CODE_FONT_KEY = "codeFontFamily";
 export const FONT_WEIGHT_KEY = "fontWeight";
 export const CUSTOM_FONT_SIZE_KEY = "customFontSizePx";
 
+export const SIDEBAR_WIDTH_KEY = "sidebarWidth";
+export const MIN_SIDEBAR_WIDTH = 160;
+export const MAX_SIDEBAR_WIDTH = 640;
+export const DEFAULT_SIDEBAR_WIDTH = 260;
+
+export const OUTLINE_WIDTH_KEY = "outlineWidth";
+export const MIN_OUTLINE_WIDTH = 160;
+export const MAX_OUTLINE_WIDTH = 480;
+export const DEFAULT_OUTLINE_WIDTH = 220;
+
 export const FONT_WEIGHT_VALUES = [
   "300",
   "400",
@@ -170,6 +180,40 @@ export function resolveInitialFinderOpenPref(value: unknown): FinderOpenPref {
 
 export function resolveInitialOutlinePref(value: unknown): OutlinePref {
   return isOutlinePref(value) ? value : "auto";
+}
+
+export function isValidSidebarWidth(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= MIN_SIDEBAR_WIDTH &&
+    value <= MAX_SIDEBAR_WIDTH
+  );
+}
+
+export function resolveInitialSidebarWidth(value: unknown): number {
+  return isValidSidebarWidth(value) ? value : DEFAULT_SIDEBAR_WIDTH;
+}
+
+export function applySidebarWidthToDOM(root: HTMLElement, px: number): void {
+  root.style.setProperty("--sidebar-width", `${px}px`);
+}
+
+export function isValidOutlineWidth(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= MIN_OUTLINE_WIDTH &&
+    value <= MAX_OUTLINE_WIDTH
+  );
+}
+
+export function resolveInitialOutlineWidth(value: unknown): number {
+  return isValidOutlineWidth(value) ? value : DEFAULT_OUTLINE_WIDTH;
+}
+
+export function applyOutlineWidthToDOM(root: HTMLElement, px: number): void {
+  root.style.setProperty("--outline-width", `${px}px`);
 }
 
 export function setSegmentActive(group: HTMLElement, value: string): void {
