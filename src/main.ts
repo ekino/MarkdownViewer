@@ -27,24 +27,30 @@ import {
   BODY_FONT_KEY,
   CODE_FONT_KEY,
   CUSTOM_FONT_SIZE_KEY,
+  DEFAULT_SIDEBAR_WIDTH,
   FONTSIZE_KEY,
   FONT_WEIGHT_KEY,
   MAX_CUSTOM_FONT_SIZE,
+  MAX_SIDEBAR_WIDTH,
   MIN_CUSTOM_FONT_SIZE,
+  MIN_SIDEBAR_WIDTH,
   FINDER_OPEN_KEY,
   OUTLINE_PREF_KEY,
+  SIDEBAR_WIDTH_KEY,
   applyBodyFontToDOM,
   applyCodeFontToDOM,
   applyCustomFontSizeToDOM,
   applyFontSizeToDOM,
   applyFontWeightToDOM,
   applyOutlinePrefToDOM,
+  applySidebarWidthToDOM,
   resolveInitialCustomFontSize,
   resolveInitialFontFamily,
   resolveInitialFontSize,
   resolveInitialFinderOpenPref,
   resolveInitialFontWeight,
   resolveInitialOutlinePref,
+  resolveInitialSidebarWidth,
   setSegmentActive,
   type FinderOpenPref,
   type FontSize,
@@ -158,6 +164,9 @@ async function initTheme(): Promise<void> {
   const savedOutline = resolveInitialOutlinePref(
     await store.get(OUTLINE_PREF_KEY)
   );
+  const savedSidebarWidth = resolveInitialSidebarWidth(
+    await store.get(SIDEBAR_WIDTH_KEY)
+  );
 
   const storeCustoms = sanitizeCustomThemes(
     await store.get(CUSTOM_THEMES_KEY)
@@ -192,6 +201,7 @@ async function initTheme(): Promise<void> {
   applyActiveTheme();
   applyFontSize(savedFontSize);
   applyOutlinePref(savedOutline);
+  applySidebarWidthToDOM(document.documentElement, savedSidebarWidth);
   applyBodyFontToDOM(document.documentElement, currentBodyFont);
   applyCodeFontToDOM(document.documentElement, currentCodeFont);
   applyFontWeightToDOM(document.documentElement, currentFontWeight);
@@ -457,6 +467,11 @@ const searchOptWholeWord = document.getElementById(
   "search-opt-wholeword"
 ) as HTMLInputElement;
 
+const sidebarEl = document.getElementById("sidebar") as HTMLDivElement;
+const sidebarResizer = document.getElementById(
+  "sidebar-resizer"
+) as HTMLDivElement;
+
 const appWindow = getCurrentWindow();
 
 // Keeps the native window title in sync with what the window shows. The title is
@@ -664,6 +679,63 @@ function initSearch(): void {
   searchOptWholeWord.addEventListener("change", applySearchOptions);
 
   document.addEventListener("keydown", handleGlobalSearchShortcut);
+}
+
+// --- Sidebar resizing ---
+
+let sidebarDragging = false;
+let sidebarDragStartX = 0;
+let sidebarDragStartWidth = 0;
+
+function currentSidebarWidth(): number {
+  return sidebarEl.getBoundingClientRect().width;
+}
+
+function setSidebarWidth(px: number): void {
+  const clamped = Math.min(
+    MAX_SIDEBAR_WIDTH,
+    Math.max(MIN_SIDEBAR_WIDTH, px)
+  );
+  applySidebarWidthToDOM(document.documentElement, clamped);
+}
+
+function initSidebarResizer(): void {
+  sidebarResizer.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    // Capture so moves/up keep firing even if the cursor leaves the window.
+    sidebarResizer.setPointerCapture(e.pointerId);
+    sidebarDragging = true;
+    sidebarDragStartX = e.clientX;
+    sidebarDragStartWidth = currentSidebarWidth();
+    document.body.classList.add("resizing-sidebar");
+  });
+
+  sidebarResizer.addEventListener("pointermove", (e) => {
+    if (!sidebarDragging) return;
+    setSidebarWidth(sidebarDragStartWidth + (e.clientX - sidebarDragStartX));
+  });
+
+  function endSidebarDrag(): void {
+    if (!sidebarDragging) return;
+    sidebarDragging = false;
+    document.body.classList.remove("resizing-sidebar");
+  }
+
+  sidebarResizer.addEventListener("pointerup", async (e) => {
+    if (!sidebarDragging) return;
+    sidebarResizer.releasePointerCapture(e.pointerId);
+    endSidebarDrag();
+    await savePref(SIDEBAR_WIDTH_KEY, Math.round(currentSidebarWidth()));
+  });
+
+  sidebarResizer.addEventListener("pointercancel", () => {
+    endSidebarDrag();
+  });
+
+  sidebarResizer.addEventListener("dblclick", async () => {
+    setSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
+    await savePref(SIDEBAR_WIDTH_KEY, DEFAULT_SIDEBAR_WIDTH);
+  });
 }
 
 // --- Preferences modal ---
@@ -1519,6 +1591,7 @@ async function init(): Promise<void> {
   await initTheme();
   initSearch();
   initPreferences();
+  initSidebarResizer();
 
   // Runtime opens (hot-start file association, "Open With", CLI events)
   appWindow.listen<string>("open-folder", (event) => {

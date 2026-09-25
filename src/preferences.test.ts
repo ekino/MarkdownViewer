@@ -23,10 +23,16 @@ import {
   applyCodeFontToDOM,
   applyFontWeightToDOM,
   applyCustomFontSizeToDOM,
+  applySidebarWidthToDOM,
+  resolveInitialSidebarWidth,
+  isValidSidebarWidth,
   effectiveFontSizePx,
   PRESET_FONT_SIZE_PX,
   MIN_CUSTOM_FONT_SIZE,
   MAX_CUSTOM_FONT_SIZE,
+  MIN_SIDEBAR_WIDTH,
+  MAX_SIDEBAR_WIDTH,
+  DEFAULT_SIDEBAR_WIDTH,
 } from "./preferences";
 
 describe("resolveDark", () => {
@@ -357,5 +363,43 @@ describe("resolveInitialFinderOpenPref", () => {
     expect(isFinderOpenPref("reuse")).toBe(true);
     expect(isFinderOpenPref("newwindow")).toBe(false);
     expect(isFinderOpenPref("")).toBe(false);
+  });
+});
+
+describe("sidebar width", () => {
+  it("isValidSidebarWidth accepts values inside the range", () => {
+    expect(isValidSidebarWidth(MIN_SIDEBAR_WIDTH)).toBe(true);
+    expect(isValidSidebarWidth(320)).toBe(true);
+    expect(isValidSidebarWidth(MAX_SIDEBAR_WIDTH)).toBe(true);
+  });
+
+  it("isValidSidebarWidth rejects out-of-range or non-numbers", () => {
+    expect(isValidSidebarWidth(MIN_SIDEBAR_WIDTH - 1)).toBe(false);
+    expect(isValidSidebarWidth(MAX_SIDEBAR_WIDTH + 1)).toBe(false);
+    expect(isValidSidebarWidth(NaN)).toBe(false);
+    expect(isValidSidebarWidth(Infinity)).toBe(false);
+    expect(isValidSidebarWidth("320")).toBe(false);
+    expect(isValidSidebarWidth(null)).toBe(false);
+    expect(isValidSidebarWidth(undefined)).toBe(false);
+  });
+
+  it("resolveInitialSidebarWidth keeps a valid value", () => {
+    expect(resolveInitialSidebarWidth(300)).toBe(300);
+    expect(resolveInitialSidebarWidth(MIN_SIDEBAR_WIDTH)).toBe(
+      MIN_SIDEBAR_WIDTH
+    );
+  });
+
+  it("resolveInitialSidebarWidth falls back to the default for bad values", () => {
+    expect(resolveInitialSidebarWidth(null)).toBe(DEFAULT_SIDEBAR_WIDTH);
+    expect(resolveInitialSidebarWidth("300")).toBe(DEFAULT_SIDEBAR_WIDTH);
+    expect(resolveInitialSidebarWidth(10)).toBe(DEFAULT_SIDEBAR_WIDTH);
+    expect(resolveInitialSidebarWidth(10000)).toBe(DEFAULT_SIDEBAR_WIDTH);
+  });
+
+  it("applySidebarWidthToDOM sets --sidebar-width in px", () => {
+    const root = document.createElement("html");
+    applySidebarWidthToDOM(root, 420);
+    expect(root.style.getPropertyValue("--sidebar-width")).toBe("420px");
   });
 });

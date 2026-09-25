@@ -270,6 +270,30 @@
       overflow: hidden;
     }
 
+    /* Drag handle that resizes the left sidebar. It sits between the sidebar's
+       right border and the content area as a narrow invisible strip that lights
+       up on hover/while dragging. */
+    #sidebar-resizer {
+      flex: 0 0 6px;
+      cursor: col-resize;
+      background: transparent;
+      border-left: 1px solid transparent;
+      transition:
+        background 0.15s,
+        border-color 0.15s;
+    }
+
+    #sidebar-resizer:hover,
+    body.resizing-sidebar #sidebar-resizer {
+      background: var(--accent-light);
+      border-left-color: var(--accent);
+    }
+
+    body.resizing-sidebar {
+      cursor: col-resize;
+      user-select: none;
+    }
+
     #sidebar-header {
       padding: 16px;
       border-bottom: 1px solid var(--border);
@@ -2051,6 +2075,8 @@
         </div>
         <div id="file-list"></div>
       </div>
+
+      <div id="sidebar-resizer" aria-hidden="true"></div>
 
       <div id="content" class="empty">
         <div id="empty-state">
