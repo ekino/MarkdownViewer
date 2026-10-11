@@ -403,6 +403,16 @@ describe("createNavigator", () => {
     expect(h.nav.state().current?.file).toBe("a.md");
   });
 
+  it("cancelPending drops a load in progress and keeps the view", async () => {
+    const h = harness();
+    await start(h, doc("a.md"));
+    const b = h.nav.navigate(doc("b.md"));
+    h.nav.cancelPending();
+    await h.finish(doc("b.md"));
+    expect(await b).toBe(false);
+    expect(h.nav.state().current?.file).toBe("a.md");
+  });
+
   it("decorationsDone follows the current view's decorations", async () => {
     const h = harness();
     const gate = deferred<void>();

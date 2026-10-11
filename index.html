@@ -257,6 +257,15 @@
       outline: none;
     }
 
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+    }
+
     .nav-spinner {
       width: 18px;
       height: 18px;
@@ -2899,7 +2908,8 @@
           <svg class="icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/></svg>
           <span data-i18n="nav.home">Accueil</span>
         </button>
-        <span id="nav-spinner" class="nav-spinner" hidden role="status" data-i18n-aria-label="loading"></span>
+        <span id="nav-spinner" class="nav-spinner" hidden aria-hidden="true"></span>
+        <span id="sr-status" class="sr-only" role="status" aria-live="polite"></span>
       </div>
       <nav id="breadcrumb" data-i18n-aria-label="breadcrumb.label"></nav>
       <div id="titlebar-spacer" data-tauri-drag-region></div>

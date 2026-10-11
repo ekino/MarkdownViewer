@@ -476,6 +476,7 @@ const outlineToggle = document.getElementById("outline-toggle") as HTMLButtonEle
 const searchToggle = document.getElementById("search-toggle") as HTMLButtonElement;
 const searchBoxEl = document.getElementById("search-box") as HTMLDivElement;
 const navSpinner = document.getElementById("nav-spinner") as HTMLSpanElement;
+const srStatus = document.getElementById("sr-status") as HTMLSpanElement;
 const prefsBtn = document.getElementById("prefs-btn") as HTMLButtonElement;
 const contentEl = document.getElementById("content") as HTMLDivElement;
 const contentLoading = document.getElementById(
@@ -643,11 +644,17 @@ function docEntry(root: string, file: string, anchor?: string): NavEntry {
   return { kind: "doc", rootPath: root, dir: file.split("/").slice(0, -1), file, anchor };
 }
 
+/** Open a document; the one already on screen is read again (it may have changed). */
+function openDocument(root: string, file: string): Promise<boolean> {
+  if (activeScreen() === "doc" && root === rootPath && file === activeFile) return nav.reload();
+  return nav.navigate(docEntry(root, file));
+}
+
 async function openFileFromPath(filePath: string): Promise<void> {
   const lastSep = filePath.lastIndexOf("/");
   const parentDir = filePath.substring(0, lastSep);
   const fileName = filePath.substring(lastSep + 1);
-  const ok = await nav.navigate(docEntry(parentDir, fileName));
+  const ok = await openDocument(parentDir, fileName);
   if (ok) {
     await saveRootPath(parentDir);
     await recordRecent(filePath, "file");
@@ -685,7 +692,18 @@ function handleSearchInputKey(e: KeyboardEvent): void {
       searchController?.clear();
     } else {
       searchInput.blur();
+      foldSearch();
     }
+  }
+}
+
+/** Fold the compact search field (narrow windows) back behind its button. */
+function foldSearch(): void {
+  if (!document.body.classList.contains("search-open")) return;
+  document.body.classList.remove("search-open");
+  searchOptionsMenu.classList.remove("visible");
+  if (document.activeElement === document.body || searchBoxEl.contains(document.activeElement)) {
+    focusVisible(searchToggle);
   }
 }
 
@@ -1486,8 +1504,9 @@ function initPreferences(): void {
     setLocale(value as Locale);
     document.documentElement.lang = value;
     applyTranslations(document);
-    // Home, folder view, sidebar and breadcrumb are built in JS: rebuild them.
-    void nav.reload();
+    // Home, folder view, sidebar and breadcrumb are built in JS: rebuild them
+    // (a navigation under way renders in the new language anyway).
+    if (nav.pending() === 0) relabelScreen();
     await savePref(LOCALE_KEY, value);
   });
 
@@ -1733,12 +1752,14 @@ function menuSeparator(): HTMLElement {
 }
 
 let folderMenuOpening = false;
+let folderMenuSeq = 0;
 
 async function openFolderMenu(): Promise<void> {
   folderMenuOpening = true;
+  const seq = ++folderMenuSeq;
   const recents = (await loadRecents()).filter((e) => e.kind === "folder").slice(0, 5);
-  // Closed (second click, Escape) while the recents were loading.
-  if (!folderMenuOpening) return;
+  // Closed (second click, Escape) or reopened while the recents were loading.
+  if (!folderMenuOpening || seq !== folderMenuSeq) return;
   folderMenuOpening = false;
   const items: HTMLElement[] = [];
   if (recents.length > 0) {
@@ -1818,9 +1839,13 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+/** Fields where ⌘↑ moves the caret or changes the value (not checkboxes or buttons). */
 function isEditable(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
-  return Boolean(el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)));
+  if (!el) return false;
+  if (el.isContentEditable || el.tagName === "TEXTAREA" || el.tagName === "SELECT") return true;
+  if (el.tagName !== "INPUT") return false;
+  return !["checkbox", "radio", "button", "submit", "reset", "color", "range"].includes((el as HTMLInputElement).type);
 }
 
 function initChrome(): void {
@@ -1838,17 +1863,15 @@ function initChrome(): void {
     document.body.classList.add("search-open");
     focusSearch();
   });
-  // Fold the compact field back only once focus has left the whole search UI
-  // (its buttons and options menu included) and there is no query.
-  for (const el of [searchBoxEl, searchOptionsMenu]) {
-    el.addEventListener("focusout", (e) => {
-      const next = e.relatedTarget as Node | null;
-      if (next && (searchBoxEl.contains(next) || searchOptionsMenu.contains(next))) return;
-      if (!searchInput.value && !searchOptionsMenu.classList.contains("visible")) {
-        document.body.classList.remove("search-open");
-      }
-    });
-  }
+  // Fold the compact field back on a click outside the search UI when there is
+  // no query. Not on focusout: WebKit does not focus buttons on click, so the
+  // field would fold under the pointer before its own buttons get the click.
+  document.addEventListener("pointerdown", (e) => {
+    if (!document.body.classList.contains("search-open") || searchInput.value) return;
+    const target = e.target as Node;
+    if (searchBoxEl.contains(target) || searchOptionsMenu.contains(target) || searchToggle.contains(target)) return;
+    foldSearch();
+  });
   prefsBtn.addEventListener("click", openPrefs);
   folderSwitcher.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -1935,8 +1958,10 @@ async function init(): Promise<void> {
     target = docEntry(view.path.substring(0, sep), view.path.substring(sep + 1));
   } else if (view.kind === "folder") {
     // The last folder may be gone since (deleted, unmounted volume): then home.
+    // "denied" or "error" still opens it: the folder view says what is wrong.
     const fromSaved = pending?.kind !== "folder";
-    if (!fromSaved || (await pathStatus(view.path)) === "dir") {
+    const status = fromSaved ? await pathStatus(view.path) : "dir";
+    if (status !== "missing" && status !== "file" && status !== "other") {
       target = { kind: "folder", rootPath: view.path, dir: [] };
     }
   }
@@ -1951,7 +1976,10 @@ async function init(): Promise<void> {
   }
   // A startup document that cannot be read still leaves the window usable.
   if (!ok && !nav.state().current && nav.pending() === 0) {
+    const failure = lastNavError;
     await nav.navigate({ kind: "home", rootPath: null, dir: [] });
+    // The home commit cleared the banner: tell the reader why they are here.
+    if (failure) onNavigationError(failure.error, failure.target);
   }
 }
 
@@ -2014,7 +2042,10 @@ function goHome(): void {
 }
 
 function closeFolder(): void {
-  void nav.navigate({ kind: "home", rootPath: null, dir: [] });
+  void nav.navigate({ kind: "home", rootPath: null, dir: [] }).then((ok) => {
+    // The control that closed it (banner, folder menu) is gone: land on Home.
+    if (ok && (document.activeElement === document.body || !document.activeElement)) navHomeBtn.focus();
+  });
 }
 
 /** ⌘↑: from a document to its folder, from a folder to its parent. */
@@ -2107,6 +2138,8 @@ interface DocTimings {
   read: number;
   parse: number;
   images?: number;
+  dom?: number;
+  outline?: number;
 }
 
 type Built =
@@ -2156,15 +2189,20 @@ async function prepare(target: NavEntry, _stale: () => boolean, options: { reloa
   }
   const root = target.rootPath!;
   if (target.kind === "folder") {
-    const listing = await listForNavigation(root, target.dir, true);
-    return { kind: "folder", listing, readme: findReadme(listing.entries)?.name ?? null };
+    const loading = showLoadingSoon();
+    try {
+      const listing = await listForNavigation(root, target.dir, true);
+      return { kind: "folder", listing, readme: findReadme(listing.entries)?.name ?? null };
+    } finally {
+      hideLoading(loading);
+    }
   }
   // Same document, another heading: no need to read or render it again.
   if (!options.reload && activeScreen() === "doc" && root === rootPath && target.file === activeFile) {
     return { kind: "same-doc" };
   }
   const fullPath = `${root}/${target.file}`;
-  showLoadingSoon();
+  const loading = showLoadingSoon();
   try {
     const t0 = performance.now();
     if (debugOverlay.isVisible()) await invoke("ping");
@@ -2186,7 +2224,7 @@ async function prepare(target: NavEntry, _stale: () => boolean, options: { reloa
       timings: { start: t0, ping: t1 - t0, read: t2 - t1, parse: t3 - t2 },
     };
   } finally {
-    hideLoading();
+    hideLoading(loading);
   }
 }
 
@@ -2219,7 +2257,7 @@ function build(p: Prepared, ctx: CommitContext): Built {
     open: (entry: Entry) => {
       const path = [...target.dir, entry.name];
       if (entry.kind === "directory") void nav.navigate({ kind: "folder", rootPath: root, dir: path });
-      else void nav.navigate(docEntry(root, path.join("/")));
+      else void openDocument(root, path.join("/"));
     },
     up: () => void nav.navigate({ kind: "folder", rootPath: root, dir: target.dir.slice(0, -1) }),
   };
@@ -2234,7 +2272,7 @@ function build(p: Prepared, ctx: CommitContext): Built {
         {
           open: entryActions.open,
           openReadme: () => {
-            if (readmePath) void nav.navigate(docEntry(root, readmePath));
+            if (readmePath) void openDocument(root, readmePath);
           },
           openOther: () => void openFolder(),
         }
@@ -2295,8 +2333,8 @@ function publishView(b: Built, ctx: CommitContext): void {
   hideLoadError();
   lastCommit = {
     sameDoc: b.kind === "same-doc",
-    timings: b.kind === "doc" ? b.timings : null,
-    at: Date.now(),
+    timings: b.kind === "doc" ? b.timings : lastCommit.timings,
+    at: b.kind === "same-doc" ? lastCommit.at : Date.now(),
   };
   if (b.kind === "same-doc") return;
 
@@ -2327,10 +2365,15 @@ function publishView(b: Built, ctx: CommitContext): void {
   }
 
   if (b.kind === "doc") {
+    docDecorated = false;
     currentDocTitle = b.title;
+    const tDom = performance.now();
     markdownEl.replaceChildren(b.node);
     slowReadNotice.hidden = !(b.slow && !slowReadDismissed);
+    const tOutline = performance.now();
     buildOutline();
+    b.timings.dom = tOutline - tDom;
+    b.timings.outline = performance.now() - tOutline;
     // The search index points into the content just replaced: drop it until
     // the decorations (Mermaid) are done, then rebuild it. The query stays.
     searchController?.suspend();
@@ -2356,9 +2399,13 @@ function publishView(b: Built, ctx: CommitContext): void {
   syncWindowTitle();
 }
 
+// False from a document's commit until its decorations are done. A heading jump
+// committed in between takes over the unfinished work instead of skipping it.
+let docDecorated = true;
+
 async function decorate(ctx: DecorationContext): Promise<void> {
   const screen = ctx.target.kind;
-  if (screen === "doc" && lastCommit.sameDoc) {
+  if (screen === "doc" && lastCommit.sameDoc && docDecorated) {
     // A heading of the document already on screen: just go there.
     applyPositioning(contentEl, ctx.positioning);
     return;
@@ -2385,11 +2432,12 @@ async function decorate(ctx: DecorationContext): Promise<void> {
           parse: timings.parse,
           images: timings.images ?? 0,
           mermaid: mermaidMs,
-          dom: 0,
-          outline: 0,
+          dom: timings.dom ?? 0,
+          outline: timings.outline ?? 0,
         },
       });
     }
+    docDecorated = true;
     if (rootPath && activeFile) {
       // Dated when the document was opened, not when its diagrams finished.
       void writeLastRead({
@@ -2471,7 +2519,10 @@ function captureScroll(): number {
   return homeEl.scrollTop;
 }
 
+let lastNavError: { error: unknown; target: NavEntry } | null = null;
+
 function onNavigationError(error: unknown, target: NavEntry): void {
+  lastNavError = { error, target };
   console.error("Failed to open:", target, error);
   // Surface the failure. A console-only error made a whole class of unopenable
   // files look like an unresponsive click: the sidebar listed them, selecting
@@ -2519,14 +2570,17 @@ function syncNavButtons(): void {
 // changed keeps a click that activates the window from landing on a node that
 // is being replaced.
 let homeDataKey = "";
+let homeRefreshSeq = 0;
 
 async function refreshHome(): Promise<void> {
   const current = nav.state().current;
   if (current?.kind !== "home") return;
   const token = viewToken;
+  const seq = ++homeRefreshSeq;
   const data = await buildHomeData(current.rootPath);
-  // Another view was committed meanwhile (closing the folder, opening one…).
-  if (token !== viewToken) return;
+  // Another view was committed meanwhile (closing the folder, opening one…),
+  // or a later refresh started: only the latest lands.
+  if (token !== viewToken || seq !== homeRefreshSeq) return;
   const key = JSON.stringify(data);
   if (key === homeDataKey) return;
   homeDataKey = key;
@@ -2535,6 +2589,39 @@ async function refreshHome(): Promise<void> {
     const built = build({ kind: "home", home: data }, ctx);
     if (built.kind === "home") homeEl.replaceChildren(built.node);
   }
+}
+
+/**
+ * Rebuild what is built in JS in the current language. Home and folder view are
+ * prepared again (no document read); a document keeps its content and only its
+ * sidebar and breadcrumb are rebuilt, from the listing already in hand.
+ */
+function relabelScreen(): void {
+  const current = nav.state().current;
+  if (!current) return;
+  if (current.kind !== "doc") {
+    void nav.reload();
+    return;
+  }
+  if (!rootPath || !listingCache) return;
+  const root = rootPath;
+  const dir = [...currentPath];
+  const readme = findReadme(listingCache.listing.entries)?.name ?? null;
+  fileList.replaceChildren(
+    buildFileList(listingCache.listing, dir.length > 0, activeFile?.split("/").pop() ?? null, readme, {
+      open: (entry) => {
+        const path = [...dir, entry.name];
+        if (entry.kind === "directory") void nav.navigate({ kind: "folder", rootPath: root, dir: path });
+        else void openDocument(root, path.join("/"));
+      },
+      up: () => void nav.navigate({ kind: "folder", rootPath: root, dir: dir.slice(0, -1) }),
+    })
+  );
+  breadcrumb.replaceChildren(
+    buildBreadcrumb(rootName, dir, activeFile?.split("/").pop() ?? null, false, (depth) => {
+      void nav.navigate({ kind: "folder", rootPath: root, dir: dir.slice(0, depth) });
+    })
+  );
 }
 
 async function resumeReading(): Promise<void> {
@@ -2585,30 +2672,32 @@ const docCache = new Map<string, { mtime: number; text: string }>();
 let slowReadDismissed = false;
 let loadingTimer: ReturnType<typeof setTimeout> | null = null;
 
-// Several loads can overlap (a newer one supersedes an older): the spinner
-// stays until the last of them is done.
-let loadsInProgress = 0;
+// Loads overlap when a newer one supersedes an older one: the indicator
+// follows the latest only, so a slow superseded read cannot keep it spinning.
+let loadToken = 0;
 
-function showLoadingSoon(): void {
-  loadsInProgress += 1;
-  if (loadsInProgress > 1) return;
+function showLoadingSoon(): number {
+  loadToken += 1;
+  if (loadingTimer !== null) clearTimeout(loadingTimer);
   // Small delay so instant (cached) reads never flash a spinner.
   loadingTimer = setTimeout(() => {
     contentLoading.hidden = false;
     // The card may be hidden (opening from home or a folder): show it up top too.
     navSpinner.hidden = false;
+    srStatus.textContent = t("loading");
   }, 150);
+  return loadToken;
 }
 
-function hideLoading(): void {
-  loadsInProgress = Math.max(0, loadsInProgress - 1);
-  if (loadsInProgress > 0) return;
+function hideLoading(token: number): void {
+  if (token !== loadToken) return;
   if (loadingTimer !== null) {
     clearTimeout(loadingTimer);
     loadingTimer = null;
   }
   contentLoading.hidden = true;
   navSpinner.hidden = true;
+  srStatus.textContent = "";
 }
 
 slowReadDismiss.addEventListener("click", () => {
@@ -2714,6 +2803,8 @@ function buildOutline(): void {
 /** A heading of the open document; following the same link again scrolls again. */
 function goToAnchor(root: string, file: string, anchor: string): void {
   if (nav.state().current?.anchor === anchor) {
+    // The reader chose to stay here: whatever was still loading is dropped.
+    nav.cancelPending();
     markProgrammaticScroll(1500);
     markdownEl.querySelector(`#${CSS.escape(anchor)}`)?.scrollIntoView({ behavior: "smooth" });
     return;

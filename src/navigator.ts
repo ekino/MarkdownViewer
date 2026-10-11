@@ -127,6 +127,8 @@ export interface Navigator {
   navigate(target: NavEntry, options?: NavigateOptions): Promise<boolean>;
   /** Read the entry on screen again, keeping the history and the reading position. */
   reload(): Promise<boolean>;
+  /** Drop every navigation still loading: what is on screen stays. */
+  cancelPending(): void;
   back(): Promise<boolean>;
   forward(): Promise<boolean>;
   /**
@@ -278,6 +280,11 @@ export function createNavigator<P, B>(deps: NavigatorDeps<P, B>): Navigator {
         return request({ kind: "reload", index });
       }
       return request({ kind: "push", target: copyEntry(target), restoreScrollTop: options.restoreScrollTop });
+    },
+    cancelPending() {
+      if (inFlight === 0) return;
+      requestGen += 1;
+      pendingTraverse = null;
     },
     reload() {
       if (index < 0) return Promise.resolve(false);
