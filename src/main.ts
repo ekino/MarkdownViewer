@@ -106,6 +106,7 @@ import {
 import {
   createNavigator,
   returnTarget,
+  sameTarget,
   type CommitContext,
   type DecorationContext,
   type NavEntry,
@@ -345,6 +346,7 @@ async function renderMermaidDiagrams(isCurrent: () => boolean = () => true): Pro
       errWrapper.className = "mermaid-wrapper";
       errWrapper.style.borderColor = "#ef4444";
       const errMsg = document.createElement("div");
+      errMsg.className = "mermaid-error-msg";
       errMsg.style.cssText = "padding:12px 16px;font-size:12px;color:#ef4444;";
       errMsg.textContent = t("mermaid.error");
       const srcPre = document.createElement("pre");
@@ -692,19 +694,21 @@ function handleSearchInputKey(e: KeyboardEvent): void {
       searchController?.clear();
     } else {
       searchInput.blur();
-      foldSearch();
+      foldSearch(true);
     }
   }
 }
 
-/** Fold the compact search field (narrow windows) back behind its button. */
-function foldSearch(): void {
+/**
+ * Fold the compact search field (narrow windows) back behind its button.
+ * From the keyboard (Escape) focus goes to the button; a click elsewhere
+ * leaves focus to the click.
+ */
+function foldSearch(fromKeyboard = false): void {
   if (!document.body.classList.contains("search-open")) return;
   document.body.classList.remove("search-open");
   searchOptionsMenu.classList.remove("visible");
-  if (document.activeElement === document.body || searchBoxEl.contains(document.activeElement)) {
-    focusVisible(searchToggle);
-  }
+  if (fromKeyboard && searchToggle.getClientRects().length > 0) searchToggle.focus();
 }
 
 function focusSearch(): void {
@@ -1504,9 +1508,9 @@ function initPreferences(): void {
     setLocale(value as Locale);
     document.documentElement.lang = value;
     applyTranslations(document);
-    // Home, folder view, sidebar and breadcrumb are built in JS: rebuild them
-    // (a navigation under way renders in the new language anyway).
-    if (nav.pending() === 0) relabelScreen();
+    // Home, folder view, sidebar, breadcrumb and a few labels inside the
+    // document are built in JS: rebuild them in the new language.
+    relabelScreen();
     await savePref(LOCALE_KEY, value);
   });
 
@@ -1863,6 +1867,14 @@ function initChrome(): void {
     document.body.classList.add("search-open");
     focusSearch();
   });
+  // Escape from the field's buttons folds it too (the field handles its own).
+  searchBoxEl.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && e.target !== searchInput && !searchInput.value) {
+      e.preventDefault();
+      foldSearch(true);
+    }
+  });
+
   // Fold the compact field back on a click outside the search UI when there is
   // no query. Not on focusout: WebKit does not focus buttons on click, so the
   // field would fold under the pointer before its own buttons get the click.
@@ -1953,6 +1965,7 @@ async function init(): Promise<void> {
   const pending = await invoke<PendingOpen | null>("get_pending_open");
   const view = resolveInitialView(pending, await loadRootPath(), launchPref === "last-folder");
   let target: NavEntry = { kind: "home", rootPath: null, dir: [] };
+  let savedStatus = "dir";
   if (view.kind === "file") {
     const sep = view.path.lastIndexOf("/");
     target = docEntry(view.path.substring(0, sep), view.path.substring(sep + 1));
@@ -1960,8 +1973,8 @@ async function init(): Promise<void> {
     // The last folder may be gone since (deleted, unmounted volume): then home.
     // "denied" or "error" still opens it: the folder view says what is wrong.
     const fromSaved = pending?.kind !== "folder";
-    const status = fromSaved ? await pathStatus(view.path) : "dir";
-    if (status !== "missing" && status !== "file" && status !== "other") {
+    savedStatus = fromSaved ? await pathStatus(view.path) : "dir";
+    if (savedStatus !== "missing" && savedStatus !== "file" && savedStatus !== "other") {
       target = { kind: "folder", rootPath: view.path, dir: [] };
     }
   }
@@ -1970,16 +1983,18 @@ async function init(): Promise<void> {
     await saveRootPath(target.rootPath);
     await recordRecent(`${target.rootPath}/${target.file}`, "file");
   }
-  if (ok && target.kind === "folder" && target.rootPath) {
+  // A folder that cannot be read is shown (its view says why) but not promoted.
+  if (ok && target.kind === "folder" && target.rootPath && savedStatus === "dir") {
     await saveRootPath(target.rootPath);
     await recordRecent(target.rootPath, "folder");
   }
   // A startup document that cannot be read still leaves the window usable.
   if (!ok && !nav.state().current && nav.pending() === 0) {
-    const failure = lastNavError;
-    await nav.navigate({ kind: "home", rootPath: null, dir: [] });
-    // The home commit cleared the banner: tell the reader why they are here.
-    if (failure) onNavigationError(failure.error, failure.target);
+    const failure = lastNavError && sameTarget(lastNavError.target, target) ? lastNavError : null;
+    const homeShown = await nav.navigate({ kind: "home", rootPath: null, dir: [] });
+    // The home commit cleared the banner: tell the reader why they are here —
+    // unless something else was opened meanwhile and replaced the fallback.
+    if (homeShown && failure) onNavigationError(failure.error, failure.target);
   }
 }
 
@@ -2044,7 +2059,10 @@ function goHome(): void {
 function closeFolder(): void {
   void nav.navigate({ kind: "home", rootPath: null, dir: [] }).then((ok) => {
     // The control that closed it (banner, folder menu) is gone: land on Home.
-    if (ok && (document.activeElement === document.body || !document.activeElement)) navHomeBtn.focus();
+    const focused = document.activeElement as HTMLElement | null;
+    if (ok && (!focused || focused === document.body || focused.getClientRects().length === 0)) {
+      navHomeBtn.focus();
+    }
   });
 }
 
@@ -2071,16 +2089,6 @@ function handleNavCommand(step: string): void {
 /** Preferences, a theme dialog, a lightbox or a diagram is in front: leave the page alone. */
 function modalOpen(): boolean {
   return Boolean(document.querySelector(".prefs-backdrop.visible, .image-overlay, .mermaid-overlay"));
-}
-
-function openEntry(entry: Entry): void {
-  if (rootPath === null) return;
-  const path = [...currentPath, entry.name];
-  if (entry.kind === "directory") {
-    void nav.navigate({ kind: "folder", rootPath, dir: path });
-  } else {
-    void nav.navigate(docEntry(rootPath, path.join("/")));
-  }
 }
 
 // --- Filesystem ---
@@ -2144,13 +2152,14 @@ interface DocTimings {
 
 type Built =
   | { kind: "home"; node: HTMLElement }
-  | { kind: "folder"; node: HTMLElement; sidebar: HTMLElement; count: number }
+  | { kind: "folder"; node: HTMLElement; sidebar: HTMLElement; count: number; listing: Listing }
   | { kind: "same-doc" }
   | {
       kind: "doc";
       node: DocumentFragment;
       sidebar: HTMLElement;
       count: number;
+      listing: Listing;
       title: string;
       slow: boolean;
       timings: DocTimings;
@@ -2228,6 +2237,42 @@ async function prepare(target: NavEntry, _stale: () => boolean, options: { reloa
   }
 }
 
+const fileCount = (listing: Listing) => listing.entries.filter((e) => e.kind === "file").length;
+
+/** The sidebar for a folder of the open root. */
+function sidebarNode(root: string, dir: string[], listing: Listing, activeName: string | null, readme: string | null) {
+  return buildFileList(listing, dir.length > 0, activeName, findReadmeName(listing, readme), {
+    open: (entry) => {
+      const path = [...dir, entry.name];
+      if (entry.kind === "directory") void nav.navigate({ kind: "folder", rootPath: root, dir: path });
+      else void openDocument(root, path.join("/"));
+    },
+    up: () => void nav.navigate({ kind: "folder", rootPath: root, dir: dir.slice(0, -1) }),
+  });
+}
+
+function findReadmeName(listing: Listing, readme: string | null): string | null {
+  return readme ?? findReadme(listing.entries)?.name ?? null;
+}
+
+function folderViewNode(root: string, dir: string[], listing: Listing, readme: string | null): HTMLElement {
+  const readmePath = readme ? [...dir, readme].join("/") : null;
+  return buildFolderView(
+    { rootName: extractRootName(root), dir, listing, readme },
+    {
+      open: (entry) => {
+        const path = [...dir, entry.name];
+        if (entry.kind === "directory") void nav.navigate({ kind: "folder", rootPath: root, dir: path });
+        else void openDocument(root, path.join("/"));
+      },
+      openReadme: () => {
+        if (readmePath) void openDocument(root, readmePath);
+      },
+      openOther: () => void openFolder(),
+    }
+  );
+}
+
 function build(p: Prepared, ctx: CommitContext): Built {
   const target = ctx.target;
   if (p.kind === "home") {
@@ -2252,33 +2297,14 @@ function build(p: Prepared, ctx: CommitContext): Built {
   if (p.kind === "same-doc") return { kind: "same-doc" };
 
   const root = target.rootPath!;
-  const name = extractRootName(root);
-  const entryActions = {
-    open: (entry: Entry) => {
-      const path = [...target.dir, entry.name];
-      if (entry.kind === "directory") void nav.navigate({ kind: "folder", rootPath: root, dir: path });
-      else void openDocument(root, path.join("/"));
-    },
-    up: () => void nav.navigate({ kind: "folder", rootPath: root, dir: target.dir.slice(0, -1) }),
-  };
-  const fileCount = (listing: Listing) => listing.entries.filter((e) => e.kind === "file").length;
 
   if (p.kind === "folder") {
-    const readmePath = p.readme ? [...target.dir, p.readme].join("/") : null;
     return {
       kind: "folder",
-      node: buildFolderView(
-        { rootName: name, dir: target.dir, listing: p.listing, readme: p.readme },
-        {
-          open: entryActions.open,
-          openReadme: () => {
-            if (readmePath) void openDocument(root, readmePath);
-          },
-          openOther: () => void openFolder(),
-        }
-      ),
-      sidebar: buildFileList(p.listing, target.dir.length > 0, null, p.readme, entryActions),
+      node: folderViewNode(root, target.dir, p.listing, p.readme),
+      sidebar: sidebarNode(root, target.dir, p.listing, null, p.readme),
       count: fileCount(p.listing),
+      listing: p.listing,
     };
   }
 
@@ -2299,8 +2325,9 @@ function build(p: Prepared, ctx: CommitContext): Built {
   return {
     kind: "doc",
     node: content,
-    sidebar: buildFileList(p.listing, target.dir.length > 0, fileName, p.readme, entryActions),
+    sidebar: sidebarNode(root, target.dir, p.listing, fileName, p.readme),
     count: fileCount(p.listing),
+    listing: p.listing,
     title,
     slow: p.slow,
     timings: p.timings,
@@ -2325,12 +2352,16 @@ let lastCommit: { sameDoc: boolean; timings: DocTimings | null; at: number } = {
 };
 // Bumped on every commit: an async home refresh only lands on the view it started from.
 let viewToken = 0;
+// The listing the sidebar on screen was built from (never a superseded one).
+let committedListing: Listing | null = null;
 
 function publishView(b: Built, ctx: CommitContext): void {
   const target = ctx.target;
   viewToken += 1;
   closeTransientUI();
   hideLoadError();
+  // Whatever was still loading has been superseded by this commit.
+  endLoadingIndicator();
   lastCommit = {
     sameDoc: b.kind === "same-doc",
     timings: b.kind === "doc" ? b.timings : lastCommit.timings,
@@ -2353,6 +2384,7 @@ function publishView(b: Built, ctx: CommitContext): void {
     homeEl.replaceChildren(b.node);
     homeEl.scrollTop = 0;
   } else {
+    committedListing = b.listing;
     folderSwitcherName.textContent = rootName;
     folderSwitcherPath.textContent = rootPath ? parentLabel(rootPath) : "";
     folderSwitcher.title = rootPath ?? "";
@@ -2405,23 +2437,33 @@ let docDecorated = true;
 
 async function decorate(ctx: DecorationContext): Promise<void> {
   const screen = ctx.target.kind;
-  if (screen === "doc" && lastCommit.sameDoc && docDecorated) {
-    // A heading of the document already on screen: just go there.
+  if (screen === "doc" && lastCommit.sameDoc) {
+    // A heading of the document already on screen: go there now.
     applyPositioning(contentEl, ctx.positioning);
-    return;
+    if (docDecorated) return;
+    // The previous view's decorations were cut short: finish them, leaving
+    // the reader where they now are.
   }
   if (screen === "doc") {
     const timings = lastCommit.timings;
     const tMermaid = performance.now();
-    await renderMermaidDiagrams(ctx.isCurrent);
+    try {
+      await renderMermaidDiagrams(ctx.isCurrent);
+    } catch (e) {
+      console.warn("Diagrams failed to render:", e);
+    }
     if (!ctx.isCurrent()) return;
     const mermaidMs = performance.now() - tMermaid;
-    // A restored position is only right once images have their real height.
-    if (ctx.positioning.mode === "restore") await imagesSettled(markdownEl, 1500);
-    if (!ctx.isCurrent()) return;
-    applyPositioning(contentEl, ctx.positioning);
+    if (!lastCommit.sameDoc) {
+      // A restored position is only right once images have their real height.
+      if (ctx.positioning.mode === "restore") await imagesSettled(markdownEl, 1500);
+      if (!ctx.isCurrent()) return;
+      applyPositioning(contentEl, ctx.positioning);
+    }
     setSearchEnabled(true);
-    searchController?.reset({ scroll: !ctx.traversal && ctx.positioning.mode === "top" });
+    searchController?.reset({
+      scroll: !lastCommit.sameDoc && !ctx.traversal && ctx.positioning.mode === "top",
+    });
     if (timings) {
       debugOverlay.recordOpen({
         file: ctx.target.file?.split("/").pop() ?? "",
@@ -2592,36 +2634,40 @@ async function refreshHome(): Promise<void> {
 }
 
 /**
- * Rebuild what is built in JS in the current language. Home and folder view are
- * prepared again (no document read); a document keeps its content and only its
- * sidebar and breadcrumb are rebuilt, from the listing already in hand.
+ * Rebuild what is built in JS in the current language, without navigating
+ * (a load under way is left alone) and without reading anything again.
  */
 function relabelScreen(): void {
   const current = nav.state().current;
   if (!current) return;
-  if (current.kind !== "doc") {
-    void nav.reload();
+  if (current.kind === "home") {
+    homeDataKey = "";
+    void refreshHome();
     return;
   }
-  if (!rootPath || !listingCache) return;
+  if (!rootPath || !committedListing) return;
   const root = rootPath;
   const dir = [...currentPath];
-  const readme = findReadme(listingCache.listing.entries)?.name ?? null;
-  fileList.replaceChildren(
-    buildFileList(listingCache.listing, dir.length > 0, activeFile?.split("/").pop() ?? null, readme, {
-      open: (entry) => {
-        const path = [...dir, entry.name];
-        if (entry.kind === "directory") void nav.navigate({ kind: "folder", rootPath: root, dir: path });
-        else void openDocument(root, path.join("/"));
-      },
-      up: () => void nav.navigate({ kind: "folder", rootPath: root, dir: dir.slice(0, -1) }),
-    })
-  );
+  const activeName = activeFile?.split("/").pop() ?? null;
+  fileList.replaceChildren(sidebarNode(root, dir, committedListing, activeName, null));
   breadcrumb.replaceChildren(
-    buildBreadcrumb(rootName, dir, activeFile?.split("/").pop() ?? null, false, (depth) => {
+    buildBreadcrumb(rootName, dir, activeName, current.kind === "folder", (depth) => {
       void nav.navigate({ kind: "folder", rootPath: root, dir: dir.slice(0, depth) });
     })
   );
+  if (current.kind === "folder") {
+    folderViewEl.replaceChildren(folderViewNode(root, dir, committedListing, null));
+    return;
+  }
+  for (const btn of markdownEl.querySelectorAll<HTMLButtonElement>(".copy-btn:not(.copied)")) {
+    btn.textContent = t("code.copy");
+  }
+  for (const btn of markdownEl.querySelectorAll<HTMLButtonElement>(".mermaid-fullscreen-btn")) {
+    btn.textContent = t("mermaid.fullscreen");
+  }
+  for (const msg of markdownEl.querySelectorAll<HTMLElement>(".mermaid-error-msg")) {
+    msg.textContent = t("mermaid.error");
+  }
 }
 
 async function resumeReading(): Promise<void> {
@@ -2687,6 +2733,12 @@ function showLoadingSoon(): number {
     srStatus.textContent = t("loading");
   }, 150);
   return loadToken;
+}
+
+/** Stop the loading indicator whatever load it belonged to. */
+function endLoadingIndicator(): void {
+  loadToken += 1;
+  hideLoading(loadToken);
 }
 
 function hideLoading(token: number): void {
@@ -2805,6 +2857,7 @@ function goToAnchor(root: string, file: string, anchor: string): void {
   if (nav.state().current?.anchor === anchor) {
     // The reader chose to stay here: whatever was still loading is dropped.
     nav.cancelPending();
+    endLoadingIndicator();
     markProgrammaticScroll(1500);
     markdownEl.querySelector(`#${CSS.escape(anchor)}`)?.scrollIntoView({ behavior: "smooth" });
     return;
