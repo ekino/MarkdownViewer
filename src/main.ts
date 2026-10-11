@@ -708,6 +708,7 @@ function foldSearch(fromKeyboard = false): void {
   if (!document.body.classList.contains("search-open")) return;
   document.body.classList.remove("search-open");
   searchOptionsMenu.classList.remove("visible");
+  searchOptionsBtn.setAttribute("aria-expanded", "false");
   if (fromKeyboard && searchToggle.getClientRects().length > 0) searchToggle.focus();
 }
 
@@ -1869,7 +1870,14 @@ function initChrome(): void {
   });
   // Escape from the field's buttons folds it too (the field handles its own).
   searchBoxEl.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && e.target !== searchInput && !searchInput.value) {
+    // Only when the field is folded open: otherwise Escape belongs to the
+    // other handlers (closing the outline popover…).
+    if (
+      e.key === "Escape" &&
+      e.target !== searchInput &&
+      !searchInput.value &&
+      document.body.classList.contains("search-open")
+    ) {
       e.preventDefault();
       foldSearch(true);
     }
@@ -1984,7 +1992,13 @@ async function init(): Promise<void> {
     await recordRecent(`${target.rootPath}/${target.file}`, "file");
   }
   // A folder that cannot be read is shown (its view says why) but not promoted.
-  if (ok && target.kind === "folder" && target.rootPath && savedStatus === "dir") {
+  if (
+    ok &&
+    target.kind === "folder" &&
+    target.rootPath &&
+    savedStatus === "dir" &&
+    committedListing?.status === "ok"
+  ) {
     await saveRootPath(target.rootPath);
     await recordRecent(target.rootPath, "folder");
   }
@@ -2255,7 +2269,8 @@ function findReadmeName(listing: Listing, readme: string | null): string | null 
   return readme ?? findReadme(listing.entries)?.name ?? null;
 }
 
-function folderViewNode(root: string, dir: string[], listing: Listing, readme: string | null): HTMLElement {
+function folderViewNode(root: string, dir: string[], listing: Listing, knownReadme: string | null): HTMLElement {
+  const readme = findReadmeName(listing, knownReadme);
   const readmePath = readme ? [...dir, readme].join("/") : null;
   return buildFolderView(
     { rootName: extractRootName(root), dir, listing, readme },
@@ -2441,8 +2456,9 @@ async function decorate(ctx: DecorationContext): Promise<void> {
     // A heading of the document already on screen: go there now.
     applyPositioning(contentEl, ctx.positioning);
     if (docDecorated) return;
-    // The previous view's decorations were cut short: finish them, leaving
-    // the reader where they now are.
+    // The previous view's decorations were cut short: finish them, then
+    // settle the position again (diagrams change the page's height) unless
+    // the reader has scrolled meanwhile.
   }
   if (screen === "doc") {
     const timings = lastCommit.timings;
@@ -2454,10 +2470,11 @@ async function decorate(ctx: DecorationContext): Promise<void> {
     }
     if (!ctx.isCurrent()) return;
     const mermaidMs = performance.now() - tMermaid;
-    if (!lastCommit.sameDoc) {
-      // A restored position is only right once images have their real height.
-      if (ctx.positioning.mode === "restore") await imagesSettled(markdownEl, 1500);
-      if (!ctx.isCurrent()) return;
+    // A restored position (and a heading below images) is only right once
+    // images have their real height.
+    if (ctx.positioning.mode !== "top") await imagesSettled(markdownEl, 1500);
+    if (!ctx.isCurrent()) return;
+    if (!lastCommit.sameDoc || !userScrolledSincePositioning) {
       applyPositioning(contentEl, ctx.positioning);
     }
     setSearchEnabled(true);
@@ -2510,7 +2527,12 @@ function markProgrammaticScroll(ms = 400): void {
   }, ms);
 }
 
+// Set when the reader scrolls after the app positioned the page; a late
+// re-positioning (diagrams finished) must then leave them alone.
+let userScrolledSincePositioning = false;
+
 function applyPositioning(scroller: HTMLElement, positioning: Positioning): void {
+  userScrolledSincePositioning = false;
   markProgrammaticScroll();
   if (positioning.mode === "anchor") {
     // A link to a heading that does not exist leaves the reader where they are.
@@ -2527,7 +2549,9 @@ contentEl.addEventListener("scrollend", () => {
 });
 
 contentEl.addEventListener("scroll", () => {
-  if (programmaticScroll || activeScreen() !== "doc" || !rootPath || !activeFile) return;
+  if (programmaticScroll) return;
+  userScrolledSincePositioning = true;
+  if (activeScreen() !== "doc" || !rootPath || !activeFile) return;
   scheduleLastRead({
     rootPath,
     file: activeFile,
