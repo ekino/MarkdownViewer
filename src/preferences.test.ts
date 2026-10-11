@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import {
+  resolveInitialLaunchPref,
   resolveDark,
   resolveInitialAppearance,
   resolveInitialFontSize,
@@ -357,5 +358,16 @@ describe("resolveInitialFinderOpenPref", () => {
     expect(isFinderOpenPref("reuse")).toBe(true);
     expect(isFinderOpenPref("newwindow")).toBe(false);
     expect(isFinderOpenPref("")).toBe(false);
+  });
+});
+
+describe("resolveInitialLaunchPref", () => {
+  it("defaults to the home screen", () => {
+    expect(resolveInitialLaunchPref(undefined)).toBe("home");
+    expect(resolveInitialLaunchPref("garbage")).toBe("home");
+  });
+
+  it("keeps a saved choice", () => {
+    expect(resolveInitialLaunchPref("last-folder")).toBe("last-folder");
   });
 });

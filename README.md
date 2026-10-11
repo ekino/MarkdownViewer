@@ -27,13 +27,15 @@ A native macOS Markdown viewer built with [Tauri v2](https://v2.tauri.app/). Bro
 
 ### Core
 
-- **Folder browsing** — Open any folder and navigate its directory tree via the sidebar
+- **Home screen** — Pick up the last document where you left it, reopen a recent folder or file, or drop one on the window. The app opens here at launch (or on the last folder, if you prefer, in Preferences › General)
+- **Back, Forward, Home** — Every window keeps its history: ⌘[ / ⌘] move through documents, folders and in-page links, ⇧⌘H goes back to the home screen without closing the folder, ⌘↑ goes up to the enclosing folder, ⇧⌘W closes the folder (all in the native Go menu)
+- **Folder browsing** — Open any folder: an overview of its documents and subfolders, the sidebar for moving between them, a clickable breadcrumb
 - **Outline panel** — Auto-generated table of contents (h2/h3) with scroll tracking
 - **Relative link navigation** — Click `.md` links to navigate between documents
 - **Dark mode** — Follows macOS system appearance, toggleable manually
 - **Session persistence** — Remembers your last opened folder across launches
 - **Multiple windows** — Open a second folder side by side in its own window (Cmd+N for an empty window, Shift+Cmd+N to pick a folder). Each window keeps its own document, outline and search
-- **Open single files** — Open `.md` files directly via CLI, Finder "Open With", or drag & drop
+- **Open single files** — Open `.md`, `.markdown` and `.mdx` files directly via CLI, Finder "Open With", or drag & drop onto the window
 - **PDF export** — Export the current document as PDF with native rendering
 - **CLI support** — Open a folder or file directly: `mdv ~/docs` or `mdv ~/docs/README.md`
 - **Native menu** — Cmd+O to open a file, Shift+Cmd+O for a folder, standard macOS app menu

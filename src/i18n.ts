@@ -56,6 +56,7 @@ export function getCatalog(locale: Locale): Readonly<Record<string, string>> {
  * - data-i18n="key"       → element.textContent
  * - data-i18n-title="key" → element.title
  * - data-i18n-placeholder="key" → element.placeholder
+ * - data-i18n-aria-label="key" → aria-label (icon-only controls keep their SVG)
  *
  * Translations are written as plain text only; HTML injection from catalogs
  * is intentionally not supported to avoid XSS if catalogs ever become
@@ -75,5 +76,9 @@ export function applyTranslations(root: ParentNode): void {
   )) {
     const key = el.dataset.i18nPlaceholder;
     if (key) el.placeholder = t(key);
+  }
+  for (const el of root.querySelectorAll<HTMLElement>("[data-i18n-aria-label]")) {
+    const key = el.dataset.i18nAriaLabel;
+    if (key) el.setAttribute("aria-label", t(key));
   }
 }

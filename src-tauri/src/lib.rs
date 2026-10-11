@@ -527,6 +527,23 @@ async fn document_mtime(path: String) -> Result<u64, String> {
     Ok(ms)
 }
 
+// What a path is right now, for the home screen's "Reprendre" card: it tells a
+// file that is gone from one the app may not read. Follows symlinks. Indicative
+// only — opening the document still goes through read_document.
+#[tauri::command]
+async fn path_status(path: String) -> &'static str {
+    match std::fs::metadata(&path) {
+        Ok(meta) if meta.is_file() => "file",
+        Ok(meta) if meta.is_dir() => "dir",
+        Ok(_) => "other",
+        Err(e) => match e.kind() {
+            std::io::ErrorKind::NotFound => "missing",
+            std::io::ErrorKind::PermissionDenied => "denied",
+            _ => "error",
+        },
+    }
+}
+
 // Reading through the `fs` plugin adds large fixed latency per open on
 // macOS/WKWebView. A direct app command reads the file itself.
 //
@@ -758,6 +775,7 @@ pub fn run(path_arg: Option<String>) {
             print_webview,
             read_document,
             document_mtime,
+            path_status,
             ping,
             export_pdf,
             get_pending_open,
@@ -826,6 +844,24 @@ pub fn run(path_arg: Option<String>) {
                 .accelerator("CmdOrCtrl+F")
                 .build(app)?;
 
+            // Go menu: the window's own history. The frontend decides what each
+            // step means for the window that is in front.
+            let nav_back = MenuItemBuilder::with_id("nav_back", "Back")
+                .accelerator("CmdOrCtrl+[")
+                .build(app)?;
+            let nav_forward = MenuItemBuilder::with_id("nav_forward", "Forward")
+                .accelerator("CmdOrCtrl+]")
+                .build(app)?;
+            let nav_home = MenuItemBuilder::with_id("nav_home", "Home")
+                .accelerator("CmdOrCtrl+Shift+H")
+                .build(app)?;
+            let nav_up = MenuItemBuilder::with_id("nav_up", "Enclosing Folder")
+                .accelerator("CmdOrCtrl+Up")
+                .build(app)?;
+            let nav_close = MenuItemBuilder::with_id("nav_close_folder", "Close Folder")
+                .accelerator("CmdOrCtrl+Shift+W")
+                .build(app)?;
+
             // Contents are filled in by rebuild_window_menu once the handle is
             // stored below; it appends the fixed items plus one entry per window.
             let window_menu = SubmenuBuilder::new(app, "Window").build()?;
@@ -873,6 +909,13 @@ pub fn run(path_arg: Option<String>) {
                         .build()?,
                     &SubmenuBuilder::new(app, "View")
                         .items(&[&toggle_theme])
+                        .build()?,
+                    &SubmenuBuilder::new(app, "Go")
+                        .items(&[&nav_back, &nav_forward])
+                        .separator()
+                        .items(&[&nav_home, &nav_up])
+                        .separator()
+                        .items(&[&nav_close])
                         .build()?,
                     &window_menu,
                 ])
@@ -924,6 +967,10 @@ pub fn run(path_arg: Option<String>) {
                     }
                     "recent_clear" => {
                         emit_to_focused(&app_handle, "menu-clear-recent", ());
+                    }
+                    "nav_back" | "nav_forward" | "nav_home" | "nav_up" | "nav_close_folder" => {
+                        let step = &id["nav_".len()..];
+                        emit_to_focused(&app_handle, "menu-nav", step.to_string());
                     }
                     BRING_ALL_TO_FRONT_ID => {
                         bring_all_to_front(&app_handle);

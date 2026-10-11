@@ -28,6 +28,7 @@ export const APPEARANCE_KEY = "appearance";
 export const FONTSIZE_KEY = "fontSize";
 export const OUTLINE_PREF_KEY = "outlinePref";
 export const FINDER_OPEN_KEY = "finderOpenPref";
+export const LAUNCH_KEY = "launchView";
 export const LEGACY_THEME_KEY = "theme";
 
 export const BODY_FONT_KEY = "bodyFontFamily";
@@ -246,4 +247,17 @@ export function applyCustomFontSizeToDOM(
   } else {
     root.style.removeProperty("--md-body-size");
   }
+}
+
+/** What a window shows when the app starts with nothing to open. */
+export type LaunchPref = "home" | "last-folder";
+export const LAUNCH_VALUES: readonly LaunchPref[] = ["home", "last-folder"];
+
+export function isLaunchPref(value: unknown): value is LaunchPref {
+  return typeof value === "string" && (LAUNCH_VALUES as readonly string[]).includes(value);
+}
+
+/** Defaults to the home screen ("Reprendre") rather than reopening the last folder. */
+export function resolveInitialLaunchPref(value: unknown): LaunchPref {
+  return isLaunchPref(value) ? value : "home";
 }

@@ -5,8 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Markdown Viewer</title>
     <style>
+    /* Content tokens: driven by the active theme (src/themes/*.json). They
+       style the document paper and nothing else. */
     :root {
-      --sidebar-width: 260px;
+      --sidebar-width: 248px;
       --outline-width: 220px;
       --bg: #fafafa;
       --sidebar-bg: #f0f0f0;
@@ -41,21 +43,106 @@
       --search-hit-active: #a37d2a;
     }
 
+    /* Chrome tokens (the Speakino look): window, stage, cards, controls. They
+       follow the document's light/dark mode but never its theme colours. */
+    :root {
+      --ui-font: "Bricolage Grotesque Variable", "Avenir Next", "Helvetica Neue", sans-serif;
+      --ui-mono: "DM Mono", ui-monospace, Menlo, monospace;
+      --ui-sys: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+      --ui-yellow: #ffc629;
+      --ui-orange: #e8600a;
+      --ui-window: #f3efe5;
+      --ui-stage: #ffc629;
+      --ui-ink: #17130d;
+      --ui-ink-soft: #4a4237;
+      --ui-paper: #ffffff;
+      --ui-cream: #fff6dc;
+      --ui-line: #d9d0bd;
+      --ui-control: #81745e;
+      --ui-hover: rgba(23, 19, 13, 0.07);
+      --ui-card: #ffffff;
+      --ui-card-line: #17130d;
+      --ui-card-shadow: #17130d;
+      --ui-ink-card: #17130d;
+      --ui-ink-card-text: #fff6dc;
+      --ui-ink-card-soft: #d9cdae;
+      --ui-ink-card-accent: #ffc629;
+      --ui-resume-bg: #ffc629;
+      --ui-resume-text: #17130d;
+      --ui-primary-bg: #17130d;
+      --ui-primary-text: #ffc629;
+      --ui-key-bg: #ffffff;
+      --ui-key-line: #17130d;
+      --ui-sel-ring: inset 0 0 0 1.5px #17130d;
+      --ui-plan-bar: #17130d;
+      --ui-focus: #17130d;
+    }
+
+    html[data-theme="dark"] {
+      --ui-window: #1e1b16;
+      --ui-stage: #17130d;
+      --ui-ink: #fff6dc;
+      --ui-ink-soft: #cbbf9f;
+      --ui-paper: #231d14;
+      --ui-cream: #2e261a;
+      --ui-line: #3a342a;
+      --ui-control: #8a7f6c;
+      --ui-hover: rgba(255, 246, 220, 0.08);
+      --ui-card: #231d14;
+      --ui-card-line: #fff6dc;
+      --ui-card-shadow: #ffc629;
+      --ui-ink-card: #ffc629;
+      --ui-ink-card-text: #17130d;
+      --ui-ink-card-soft: #4a4237;
+      --ui-ink-card-accent: #17130d;
+      --ui-resume-bg: #17130d;
+      --ui-resume-text: #ffc629;
+      --ui-primary-bg: #ffc629;
+      --ui-primary-text: #17130d;
+      --ui-key-bg: #29251e;
+      --ui-key-line: #8a7f6c;
+      --ui-sel-ring: none;
+      --ui-plan-bar: #ffc629;
+      --ui-focus: #ffc629;
+    }
+
     * {
       margin: 0;
       padding: 0;
       box-sizing: border-box;
     }
 
+    [hidden] {
+      display: none !important;
+    }
+
     body {
-      font-family:
-        -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: var(--bg);
-      color: var(--text);
+      font-family: var(--ui-sys);
+      background: var(--ui-window);
+      color: var(--ui-ink);
       display: flex;
       flex-direction: column;
       height: 100vh;
       overflow: hidden;
+    }
+
+    /* Two regimes: choosing (home, folder) on the yellow stage, reading on cream. */
+    body[data-screen="home"],
+    body[data-screen="folder"] {
+      background: var(--ui-stage);
+    }
+
+    :focus-visible {
+      outline: 3px solid var(--ui-focus);
+      outline-offset: 2px;
+    }
+
+    .mono {
+      font-family: var(--ui-mono);
+    }
+
+    .icon {
+      flex-shrink: 0;
     }
 
     #main {
@@ -63,6 +150,7 @@
       flex: 1;
       min-height: 0;
       overflow: hidden;
+      position: relative;
     }
 
     /* Custom title bar — uses macOS Overlay style so traffic lights stay native.
@@ -70,40 +158,150 @@
            back to 80px (typical traffic-lights footprint) when unsupported. */
     #titlebar {
       display: flex;
-      align-items: center;
-      gap: 8px;
-      height: 38px;
-      padding-left: env(titlebar-area-x, 80px);
-      padding-right: 12px;
-      background: var(--sidebar-bg);
-      border-bottom: 1px solid var(--border);
+      gap: 10px;
+      /* Controls line up with the native traffic lights (centred ~16px down). */
+      height: 46px;
+      align-items: flex-start;
+      padding-top: 1px;
+      padding-left: env(titlebar-area-x, 84px);
+      padding-right: 13px;
       flex-shrink: 0;
       user-select: none;
+      position: relative;
     }
 
-    #titlebar-title {
-      flex: 1;
+    #titlebar-nav {
       display: flex;
       align-items: center;
-      justify-content: center;
-      min-width: 0;
-      font-size: 13px;
-      color: var(--text-muted);
-      overflow: hidden;
+      gap: 6px;
+      flex-shrink: 0;
     }
 
-    #titlebar-filename {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      max-width: 100%;
+    #titlebar-spacer {
+      flex: 1;
+      align-self: stretch;
+      min-width: 12px;
     }
 
     #titlebar-actions {
       display: flex;
       align-items: center;
-      gap: 6px;
+      height: 32px;
+      gap: 4px;
       flex-shrink: 0;
+    }
+
+    /* Navigation as key caps: ink border, a hard shadow below. */
+    .key-btn {
+      height: 30px;
+      min-width: 32px;
+      padding: 0 7px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      border: 2px solid var(--ui-key-line);
+      border-radius: 8px;
+      background: var(--ui-key-bg);
+      box-shadow: 0 2px 0 var(--ui-key-line);
+      color: var(--ui-ink);
+      font: 800 13px var(--ui-font);
+      cursor: pointer;
+    }
+
+    .key-btn:active:not(:disabled) {
+      transform: translateY(2px);
+      box-shadow: none;
+    }
+
+    .key-btn:disabled {
+      opacity: 0.35;
+      cursor: default;
+    }
+
+    #nav-home.is-current {
+      background: var(--ui-primary-bg);
+      color: var(--ui-primary-text);
+    }
+
+    .icon-btn {
+      width: 30px;
+      height: 30px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: none;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--ui-ink);
+      cursor: pointer;
+    }
+
+    .icon-btn:hover:not(:disabled) {
+      background: var(--ui-hover);
+    }
+
+    .icon-btn:disabled {
+      opacity: 0.35;
+      cursor: default;
+    }
+
+    #sidebar-toggle,
+    #search-toggle,
+    #outline-toggle,
+    #sidebar-close {
+      display: none;
+    }
+
+    /* Document tools only make sense on a document. */
+    body:not([data-screen="doc"]) #search-box,
+    body:not([data-screen="doc"]) #pdf-btn,
+    body:not([data-screen="doc"]) #print-btn {
+      display: none;
+    }
+
+    /* Breadcrumb: the folder path is clickable, the document is where you are. */
+    #breadcrumb {
+      display: flex;
+      align-items: center;
+      height: 30px;
+      gap: 2px;
+      min-width: 0;
+      overflow: hidden;
+      color: var(--ui-ink);
+    }
+
+    .crumb {
+      border: none;
+      background: transparent;
+      color: var(--ui-ink-soft);
+      font: 700 14px var(--ui-font);
+      padding: 4px 6px;
+      border-radius: 6px;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+
+    button.crumb:hover {
+      background: var(--ui-hover);
+      color: var(--ui-ink);
+    }
+
+    .crumb[aria-current="page"] {
+      color: var(--ui-ink);
+      font-weight: 800;
+    }
+
+    .crumb--doc {
+      font: 500 13.5px var(--ui-mono);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      cursor: default;
+    }
+
+    .crumb-sep {
+      display: inline-flex;
+      color: var(--ui-ink-soft);
     }
 
     /* Search box */
@@ -111,21 +309,18 @@
       display: flex;
       align-items: center;
       gap: 4px;
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 2px 4px 2px 8px;
-      transition: border-color 0.15s;
-    }
-
-    #search-box:focus-within {
-      border-color: var(--accent);
+      height: 32px;
+      background: var(--ui-paper);
+      border: 1px solid var(--ui-control);
+      border-radius: 9px;
+      padding: 0 4px 0 9px;
+      margin-right: 4px;
     }
 
     #search-box .search-icon {
-      width: 12px;
-      height: 12px;
-      color: var(--text-muted);
+      width: 14px;
+      height: 14px;
+      color: var(--ui-ink-soft);
       flex-shrink: 0;
     }
 
@@ -133,9 +328,9 @@
       background: none;
       border: none;
       outline: none;
-      font-size: 12px;
-      color: var(--text);
-      width: 180px;
+      font-size: 13px;
+      color: var(--ui-ink);
+      width: 190px;
       padding: 4px 0;
       font-family: inherit;
     }
@@ -146,12 +341,12 @@
     }
 
     #search-input::placeholder {
-      color: var(--text-muted);
+      color: var(--ui-ink-soft);
     }
 
     #search-counter {
-      font-size: 11px;
-      color: var(--text-muted);
+      font: 12px var(--ui-mono);
+      color: var(--ui-ink-soft);
       min-width: 0;
       white-space: nowrap;
       padding: 0 4px;
@@ -160,20 +355,19 @@
     .search-btn {
       background: none;
       border: none;
-      border-radius: 4px;
+      border-radius: 5px;
       cursor: pointer;
-      color: var(--text-muted);
-      padding: 2px 4px;
-      font-size: 11px;
-      line-height: 1;
+      color: var(--ui-ink-soft);
+      width: 22px;
+      height: 22px;
       display: flex;
       align-items: center;
       justify-content: center;
     }
 
     .search-btn:hover:not(:disabled) {
-      background: var(--sidebar-hover);
-      color: var(--text);
+      background: var(--ui-hover);
+      color: var(--ui-ink);
     }
 
     .search-btn:disabled {
@@ -183,18 +377,18 @@
 
     #search-options-menu {
       position: absolute;
-      top: 42px;
-      right: 12px;
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 8px;
+      top: 40px;
+      right: 120px;
+      background: var(--ui-paper);
+      border: 2px solid var(--ui-card-line);
+      border-radius: 12px;
       padding: 8px;
-      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+      box-shadow: 4px 4px 0 var(--ui-card-shadow);
       display: none;
       flex-direction: column;
       gap: 6px;
       z-index: 1000;
-      min-width: 180px;
+      min-width: 200px;
     }
 
     #search-options-menu.visible {
@@ -205,20 +399,21 @@
       display: flex;
       align-items: center;
       gap: 8px;
-      font-size: 12px;
-      color: var(--text);
+      font-size: 13px;
+      color: var(--ui-ink);
       cursor: pointer;
-      padding: 4px;
-      border-radius: 4px;
+      padding: 5px;
+      border-radius: 6px;
       user-select: none;
     }
 
     .search-option:hover {
-      background: var(--sidebar-hover);
+      background: var(--ui-hover);
     }
 
     .search-option input {
       cursor: pointer;
+      accent-color: var(--ui-ink);
     }
 
     /* Search highlights — CSS Custom Highlight API */
@@ -242,83 +437,226 @@
       background: var(--search-hit-active);
     }
 
-    /* Narrow window collapses search to icon-only */
-    @media (max-width: 700px) {
-      #search-input,
-      #search-counter,
-      #search-prev,
-      #search-next {
-        display: none;
-      }
-
-      #search-box.expanded #search-input,
-      #search-box.expanded #search-counter,
-      #search-box.expanded #search-prev,
-      #search-box.expanded #search-next {
-        display: inline-flex;
-      }
-    }
-
-    /* Left sidebar — files */
+    /* Left sidebar — same cream as the window, no outline. */
     #sidebar {
       width: var(--sidebar-width);
       min-width: var(--sidebar-width);
-      background: var(--sidebar-bg);
-      border-right: 1px solid var(--border);
+      background: var(--ui-window);
+      color: var(--ui-ink);
       display: flex;
       flex-direction: column;
-      overflow: hidden;
+      overflow: visible;
+      min-height: 0;
+    }
+
+    body[data-screen="home"] #sidebar,
+    body:not(.has-folder) #sidebar {
+      display: none;
+    }
+
+    /* On the yellow stage the cream sidebar is set off by a thick ink rule. */
+    body[data-screen="folder"] #sidebar {
+      border-right: 2px solid var(--ui-card-line);
     }
 
     #sidebar-header {
-      padding: 16px;
-      border-bottom: 1px solid var(--border);
+      position: relative;
+      display: flex;
+      align-items: flex-start;
+      gap: 4px;
+      padding: 2px 10px 6px;
+    }
+
+    #folder-switcher {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 8px;
+      border: none;
+      border-radius: 10px;
+      background: transparent;
+      color: var(--ui-ink);
+      text-align: left;
+      cursor: pointer;
+    }
+
+    #folder-switcher:hover,
+    #folder-switcher[aria-expanded="true"] {
+      background: var(--ui-hover);
+    }
+
+    .fs-text {
+      flex: 1;
+      min-width: 0;
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 2px;
     }
 
-    #sidebar-header h2 {
-      font-size: 14px;
-      font-weight: 600;
-      letter-spacing: -0.01em;
-      flex: 1;
+    #folder-switcher-name {
+      font: 800 20px/1.1 var(--ui-font);
+      letter-spacing: -0.02em;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
-    #sidebar-top {
+    #folder-switcher-path {
+      font-size: 12px;
+      color: var(--ui-ink-soft);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    #folder-menu {
+      position: absolute;
+      top: calc(100% - 2px);
+      left: 10px;
+      width: 290px;
+      z-index: 70;
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      padding: 6px;
+      background: var(--ui-paper);
+      color: var(--ui-ink);
+      border: 2px solid var(--ui-card-line);
+      border-radius: 12px;
+      box-shadow: 5px 5px 0 var(--ui-card-shadow);
+    }
+
+    .menu-label {
+      padding: 6px 10px 4px;
+      font: 500 12px var(--ui-mono);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--ui-ink-soft);
+    }
+
+    .menu-sep {
+      border-top: 2px dashed var(--ui-line);
+      margin: 4px 6px;
+    }
+
+    .menu-item {
       display: flex;
       align-items: center;
       gap: 8px;
-    }
-
-    #theme-toggle,
-    #print-btn,
-    #pdf-btn {
-      background: none;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 4px 8px;
-      font-size: 14px;
+      width: 100%;
+      padding: 8px 10px;
+      border: none;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--ui-ink);
+      font: 600 14px var(--ui-font);
+      text-align: left;
       cursor: pointer;
-      color: var(--text-muted);
-      transition:
-        background 0.15s,
-        color 0.15s;
-      line-height: 1;
-      flex-shrink: 0;
     }
 
-    #print-btn,
-    #pdf-btn {
+    .menu-item:hover {
+      background: var(--ui-hover);
+    }
+
+    .menu-item[aria-checked="true"] {
+      background: var(--ui-yellow);
+      color: #17130d;
+      font-weight: 800;
+    }
+
+    .menu-item-label {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .menu-item-shortcut {
+      font-size: 12px;
+      color: var(--ui-ink-soft);
+    }
+
+    #sidebar-label {
+      display: flex;
+      justify-content: space-between;
+      padding: 10px 18px 6px;
+      font: 500 12px var(--ui-mono);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    #sidebar-count {
+      color: var(--ui-ink-soft);
+    }
+
+    #file-list {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 0 10px 12px;
+    }
+
+    .file-list-items {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+
+    .file-item {
       display: flex;
       align-items: center;
+      gap: 9px;
+      width: 100%;
+      padding: 6px 10px;
+      border: none;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--ui-ink);
+      font: 400 13.5px var(--ui-sys);
+      text-align: left;
+      cursor: pointer;
     }
 
-    #theme-toggle:hover,
-    #print-btn:hover,
-    #pdf-btn:hover {
-      background: var(--sidebar-hover);
-      color: var(--text);
+    .file-item .icon {
+      opacity: 0.6;
+    }
+
+    .file-item:hover {
+      background: var(--ui-hover);
+    }
+
+    .file-item.active {
+      background: var(--ui-yellow);
+      color: #17130d;
+      font-weight: 700;
+      box-shadow: var(--ui-sel-ring);
+    }
+
+    .file-item.active .icon {
+      opacity: 1;
+    }
+
+    .file-item .name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .file-list-message {
+      padding: 10px;
+      font-size: 13px;
+      color: var(--ui-ink-soft);
+    }
+
+    #sidebar-scrim {
+      position: fixed;
+      inset: 0;
+      z-index: 55;
+      background: rgba(23, 19, 13, 0.28);
     }
 
     /* Preferences modal — macOS-style sheet */
@@ -933,175 +1271,722 @@
       width: 70px;
     }
 
-    #breadcrumb {
-      font-size: 12px;
-      color: var(--text-muted);
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      flex-wrap: wrap;
-    }
-
-    #breadcrumb span {
-      cursor: pointer;
-      color: var(--accent);
-    }
-    #breadcrumb span:hover {
-      text-decoration: underline;
-    }
-    #breadcrumb span.current {
-      color: var(--text-muted);
-      cursor: default;
-    }
-    #breadcrumb span.current:hover {
-      text-decoration: none;
-    }
-
-    #file-list {
+    /* --- Reading: the document is a Speakino card on the cream window --- */
+    #doc-card {
       flex: 1;
-      overflow-y: auto;
-      padding: 8px;
-    }
-
-    .file-item {
+      min-width: 0;
       display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 8px 12px;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 13px;
+      position: relative;
+      margin: 0 13px 13px 8px;
+      border: 2px solid var(--ui-card-line);
+      border-radius: 14px;
+      box-shadow: 5px 5px 0 var(--ui-card-shadow);
+      background: var(--bg);
       color: var(--text);
-      transition: background 0.1s;
-      user-select: none;
-    }
-
-    .file-item:hover {
-      background: var(--sidebar-hover);
-    }
-    .file-item.active {
-      background: var(--sidebar-active);
-      font-weight: 600;
-    }
-    .file-item .icon {
-      font-size: 15px;
-      width: 20px;
-      text-align: center;
-      flex-shrink: 0;
-    }
-    .file-item .name {
       overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
     }
 
-    /* Center — content */
     #content {
       flex: 1;
+      min-width: 0;
       overflow-y: auto;
-      padding: 48px 40px;
+      padding: 40px 48px 64px;
       position: relative;
     }
 
-    #content.empty {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    #empty-state {
-      text-align: center;
-      color: var(--text-muted);
-    }
-    #empty-state h2 {
-      font-size: 20px;
-      margin-bottom: 12px;
-      color: var(--text);
-    }
-    #empty-state p {
-      font-size: 14px;
-      line-height: 1.6;
-    }
-
-    #empty-state-buttons {
-      display: flex;
-      gap: 10px;
-      margin-top: 16px;
-      justify-content: center;
-    }
-
-    #open-btn,
-    #examples-btn {
-      padding: 10px 20px;
-      border: none;
-      border-radius: 8px;
-      font-size: 14px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: opacity 0.15s;
-    }
-
-    #open-btn {
-      background: var(--accent);
-      color: white;
-    }
-
-    #examples-btn {
-      background: var(--code-bg);
-      color: var(--text);
-      border: 1px solid var(--border);
-    }
-
-    #open-btn:hover,
-    #examples-btn:hover {
-      opacity: 0.85;
-    }
-
-    /* Right sidebar — outline */
+    /* Right sidebar — outline, on the paper */
     #outline {
       width: var(--outline-width);
       min-width: var(--outline-width);
       border-left: 1px solid var(--border);
-      padding: 20px 16px;
+      padding: 26px 14px;
       overflow-y: auto;
       display: none;
     }
 
+    body.has-outline #outline {
+      display: block;
+    }
+
     #outline-title {
-      font-size: 11px;
-      font-weight: 600;
+      font: 500 12px var(--ui-mono);
       text-transform: uppercase;
-      letter-spacing: 0.05em;
+      letter-spacing: 0.06em;
       color: var(--text-muted);
-      margin-bottom: 12px;
+      margin: 0 0 10px 12px;
     }
 
     .outline-item {
-      display: block;
-      padding: 4px 0;
-      font-size: 13px;
+      display: flex;
+      width: 100%;
+      padding: 4px 8px 4px 10px;
+      border: none;
+      border-left: 3px solid transparent;
+      border-radius: 0 6px 6px 0;
+      background: none;
+      font: 13px/1.4 var(--ui-sys);
       color: var(--text-muted);
-      text-decoration: none;
+      text-align: left;
       cursor: pointer;
-      line-height: 1.4;
-      border-left: 2px solid transparent;
-      padding-left: 10px;
-      margin-left: -1px;
-      transition:
-        color 0.1s,
-        border-color 0.1s;
     }
 
     .outline-item:hover {
       color: var(--text);
     }
+
     .outline-item.active {
-      color: var(--accent);
-      border-left-color: var(--accent);
+      color: var(--text);
+      font-weight: 700;
+      border-left-color: var(--ui-plan-bar);
     }
+
     .outline-item.depth-3 {
       padding-left: 22px;
+      font-size: 12.5px;
+    }
+
+    /* --- Choosing: home and folder view on the yellow stage --- */
+    #home,
+    #folder-view {
+      flex: 1;
+      min-width: 0;
+      overflow-y: auto;
+      color: var(--ui-ink);
+    }
+
+    .card {
+      background: var(--ui-card);
+      color: var(--ui-ink);
+      border: 2px solid var(--ui-card-line);
+      border-radius: 16px;
+      box-shadow: 5px 5px 0 var(--ui-card-shadow);
+      padding: 18px;
+    }
+
+    .eyebrow {
+      margin: 0;
+      font: 500 12px var(--ui-mono);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      height: 44px;
+      padding: 0 14px;
+      border: 2px solid var(--ui-card-line);
+      border-radius: 10px;
+      font: 700 15px var(--ui-font);
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .btn-wide {
+      width: 100%;
+      padding-right: 8px;
+    }
+
+    .btn-wide .btn-label {
+      flex: 1;
+      text-align: left;
+    }
+
+    .btn-ink,
+    .btn-primary {
+      background: var(--ui-primary-bg);
+      color: var(--ui-primary-text);
+      font-weight: 800;
+    }
+
+    .btn-cream,
+    .btn-secondary {
+      background: var(--ui-cream);
+      color: var(--ui-ink);
+    }
+
+    .btn-small {
+      height: 32px;
+      padding: 0 12px;
+      font-size: 14px;
+    }
+
+    .btn-link {
+      height: auto;
+      padding: 4px 6px;
+      border: none;
+      background: transparent;
+      color: inherit;
+      font: 600 13px var(--ui-sys);
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    .keycaps {
+      display: inline-flex;
+      gap: 4px;
+    }
+
+    .keycap {
+      min-width: 26px;
+      height: 26px;
+      padding: 0 5px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1.5px solid currentColor;
+      border-radius: 6px;
+      font: 500 12px var(--ui-mono);
+    }
+
+    .keycaps--big .keycap {
+      min-width: 34px;
+      height: 32px;
+      border: 2px solid var(--ui-card-line);
+      border-radius: 8px;
+      background: var(--ui-cream);
+      color: var(--ui-ink);
+      box-shadow: 0 3px 0 var(--ui-card-shadow);
+      font-size: 14px;
+    }
+
+    .home-inner {
+      max-width: 1060px;
+      margin: 0 auto;
+      padding: 12px 40px 40px 34px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    .home-inner.first-run {
+      max-width: 720px;
+    }
+
+    .kept-banner {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      padding: 8px 8px 8px 14px;
+      border-radius: 12px;
+      box-shadow: 3px 3px 0 var(--ui-card-shadow);
+      font: 600 14px var(--ui-font);
+    }
+
+    .kept-text {
+      flex: 1;
+      min-width: 200px;
+    }
+
+    .home-header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    /* The app mark, sister of Speakino's: yellow tile, offset cream square. */
+    .app-mark {
+      position: relative;
+      width: 64px;
+      height: 64px;
+      flex-shrink: 0;
+      border-radius: 15px;
+      background: var(--ui-yellow);
+      border: 2px solid var(--ui-card-line);
+    }
+
+    .app-mark::before {
+      content: "";
+      position: absolute;
+      left: 13px;
+      top: 12px;
+      width: 38px;
+      height: 38px;
+      border-radius: 8px;
+      background: #17130d;
+    }
+
+    .app-mark-face {
+      position: absolute;
+      left: 10px;
+      top: 9px;
+      width: 38px;
+      height: 38px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 2px solid #17130d;
+      border-radius: 8px;
+      background: #fff6dc;
+      color: #17130d;
+      font: 500 14px var(--ui-mono);
+    }
+
+    .home-titles {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .home-title {
+      font: 800 40px/1 var(--ui-font);
+      letter-spacing: -0.03em;
+    }
+
+    .home-tagline {
+      font: 600 16px var(--ui-font);
+      color: var(--ui-ink-soft);
+    }
+
+    .home-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 360px;
+      gap: 24px;
+      align-items: start;
+    }
+
+    .first-run .home-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .home-col {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+      min-width: 0;
+    }
+
+    .resume-card {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      padding: 22px;
+      background: var(--ui-ink-card);
+      color: var(--ui-ink-card-text);
+      box-shadow: 5px 5px 0 var(--ui-orange);
+    }
+
+    .resume-body {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .resume-card .eyebrow {
+      color: var(--ui-ink-card-accent);
+    }
+
+    .resume-title {
+      font: 800 28px/1.05 var(--ui-font);
+      letter-spacing: -0.02em;
+    }
+
+    .resume-path {
+      font-size: 12.5px;
+      color: var(--ui-ink-card-soft);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .btn-resume {
+      height: 46px;
+      padding: 0 18px;
+      border-color: var(--ui-ink-card-text);
+      background: var(--ui-resume-bg);
+      color: var(--ui-resume-text);
+      font-weight: 800;
+      font-size: 16px;
+    }
+
+    .resume-card--missing {
+      background: var(--ui-cream);
+      color: var(--ui-ink);
+      border-style: dashed;
+      border-color: var(--ui-control);
+      box-shadow: none;
+    }
+
+    .resume-card--missing .eyebrow,
+    .resume-card--missing .resume-path {
+      color: var(--ui-ink-soft);
+    }
+
+    .card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-bottom: 6px;
+    }
+
+    .recents-list {
+      list-style: none;
+    }
+
+    .recent-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+      padding: 9px 6px;
+      border: none;
+      border-top: 2px dashed var(--ui-line);
+      background: transparent;
+      color: var(--ui-ink);
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .recents-list li:first-child .recent-item {
+      border-top: none;
+    }
+
+    .recent-item:hover .recent-name {
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    .recent-tile {
+      width: 34px;
+      height: 34px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 2px solid #17130d;
+      border-radius: 9px;
+      background: #fff6dc;
+      color: #17130d;
+    }
+
+    .recent-tile--folder {
+      background: var(--ui-yellow);
+    }
+
+    .recent-text {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+
+    .recent-name {
+      font: 800 15.5px var(--ui-font);
+    }
+
+    .recent-path {
       font-size: 12px;
+      color: var(--ui-ink-soft);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .open-card {
+      display: flex;
+      flex-direction: column;
+      gap: 11px;
+    }
+
+    .open-intro {
+      font: 600 19px/1.4 var(--ui-font);
+    }
+
+    .drop-zone {
+      min-height: 76px;
+      margin-top: 2px;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      border: 2px dashed var(--ui-card-line);
+      border-radius: 12px;
+      background: var(--ui-cream);
+      text-align: center;
+    }
+
+    body.drag-over .drop-zone {
+      background: var(--ui-yellow);
+      color: #17130d;
+    }
+
+    .drop-title {
+      font: 700 15px var(--ui-font);
+    }
+
+    .drop-types {
+      font-size: 12px;
+      color: var(--ui-ink-soft);
+    }
+
+    .home-shortcut {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      font: 600 19px/1.5 var(--ui-font);
+    }
+
+    .folder-inner {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 20px 40px 44px 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 22px;
+    }
+
+    .folder-header {
+      display: flex;
+      align-items: flex-end;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    .folder-titles {
+      flex: 1;
+      min-width: 240px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .folder-titles .eyebrow {
+      color: var(--ui-ink-soft);
+    }
+
+    .folder-title {
+      font: 800 46px/1 var(--ui-font);
+      letter-spacing: -0.035em;
+      overflow-wrap: anywhere;
+    }
+
+    .folder-header .btn-ink {
+      box-shadow: 3px 3px 0 var(--ui-card-shadow);
+    }
+
+    .folder-grid {
+      list-style: none;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(min(240px, 100%), 1fr));
+      gap: 14px;
+    }
+
+    .tile {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      width: 100%;
+      padding: 14px 16px;
+      border: 2px solid var(--ui-card-line);
+      border-radius: 12px;
+      background: var(--ui-card);
+      color: var(--ui-ink);
+      box-shadow: 3px 3px 0 var(--ui-card-shadow);
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .tile:hover {
+      transform: translate(-1px, -1px);
+      box-shadow: 4px 4px 0 var(--ui-card-shadow);
+    }
+
+    .tile:active {
+      transform: translate(2px, 2px);
+      box-shadow: 1px 1px 0 var(--ui-card-shadow);
+    }
+
+    .tile-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .tile-name {
+      font-weight: 500;
+      font-size: 13.5px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .tile--dir .tile-name {
+      font: 800 16px var(--ui-font);
+    }
+
+    .tile--readme {
+      background: var(--ui-yellow);
+      color: #17130d;
+    }
+
+    .tile-hint {
+      font-size: 13px;
+      color: var(--ui-ink-soft);
+    }
+
+    .folder-message {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 12px;
+      font: 600 17px var(--ui-font);
+    }
+
+    /* Errors raised while not on a document show over the current screen. */
+    body.show-load-error:not([data-screen="doc"]) #doc-card {
+      display: flex !important;
+      position: fixed;
+      left: 50%;
+      bottom: 24px;
+      transform: translateX(-50%);
+      margin: 0;
+      width: min(520px, 90vw);
+      height: auto;
+      z-index: 80;
+    }
+
+    body.show-load-error:not([data-screen="doc"]) #doc-card > :not(#content),
+    body.show-load-error:not([data-screen="doc"]) #content > :not(#load-error) {
+      display: none;
+    }
+
+    body.show-load-error:not([data-screen="doc"]) #content {
+      padding: 0;
+    }
+
+    /* --- Narrower windows --- */
+    @media (max-width: 1100px) {
+      body.has-outline[data-screen="doc"] #outline-toggle {
+        display: inline-flex;
+      }
+
+      body.has-outline #outline {
+        display: none;
+      }
+
+      body.has-outline.outline-open #outline {
+        display: block;
+        position: absolute;
+        top: 10px;
+        right: 14px;
+        width: 290px;
+        max-height: calc(100% - 20px);
+        z-index: 40;
+        background: var(--bg);
+        border: 2px solid var(--ui-card-line);
+        border-radius: 12px;
+        box-shadow: 5px 5px 0 var(--ui-card-shadow);
+      }
+    }
+
+    @media (max-width: 1000px) {
+      body[data-screen="doc"] #search-toggle {
+        display: inline-flex;
+      }
+
+      body[data-screen="doc"] #search-box {
+        display: none;
+      }
+
+      body[data-screen="doc"].search-open #search-box {
+        display: flex;
+      }
+
+      body.search-open #search-toggle {
+        display: none;
+      }
+
+      #search-input {
+        width: 150px;
+      }
+
+      #breadcrumb .crumb:not(.crumb--doc):not(:last-of-type),
+      #breadcrumb .crumb-sep {
+        display: none;
+      }
+    }
+
+    @media (max-width: 860px) {
+      body.has-folder:not([data-screen="home"]) #sidebar-toggle,
+      #sidebar-close {
+        display: inline-flex;
+      }
+
+      body.has-folder:not([data-screen="home"]) #sidebar {
+        position: fixed;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        z-index: 60;
+        padding-top: 44px;
+        border-right: 2px solid var(--ui-card-line);
+        box-shadow: 8px 0 28px rgba(23, 19, 13, 0.18);
+        transform: translateX(-105%);
+        visibility: hidden;
+        transition:
+          transform 0.18s ease,
+          visibility 0.18s;
+      }
+
+      body.sidebar-open #sidebar {
+        transform: none;
+        visibility: visible;
+      }
+
+      #doc-card {
+        margin: 0 10px 10px 6px;
+        box-shadow: 4px 4px 0 var(--ui-card-shadow);
+      }
+
+      #content {
+        padding: 24px 28px 40px;
+      }
+
+      #nav-home .btn-label,
+      #nav-home span {
+        display: none;
+      }
+
+      .home-grid {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .home-inner,
+      .folder-inner {
+        padding: 10px 24px 32px 20px;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      #sidebar,
+      .tile {
+        transition: none;
+      }
+
+      .tile:hover,
+      .tile:active,
+      .key-btn:active:not(:disabled) {
+        transform: none;
+      }
+    }
+
+    /* The modals sit on the chrome, not on the document's theme. */
+    .prefs-backdrop {
+      --bg: var(--ui-paper);
+      --sidebar-bg: var(--ui-window);
+      --sidebar-hover: var(--ui-hover);
+      --text: var(--ui-ink);
+      --text-muted: var(--ui-ink-soft);
+      --border: var(--ui-line);
     }
 
     /* Markdown rendering */
@@ -1778,14 +2663,31 @@
         color: #1a1a1a;
       }
 
+      #titlebar,
       #sidebar,
+      #sidebar-scrim,
       #outline,
-      #empty-state,
+      #home,
+      #folder-view,
+      #load-error,
+      #slow-read-notice,
+      #content-loading,
       .copy-btn,
-      .mermaid-fullscreen-btn,
-      #print-btn,
-      #theme-toggle {
+      .mermaid-fullscreen-btn {
         display: none !important;
+      }
+
+      #main,
+      #doc-card {
+        display: block !important;
+        height: auto;
+        overflow: visible;
+        margin: 0;
+        border: none;
+        border-radius: 0;
+        box-shadow: none;
+        background: white;
+        color: #1a1a1a;
       }
 
       #content {
@@ -1842,10 +2744,17 @@
       }
     }
 
-    /* PDF export mode — applied via JS before createPDF capture */
+    /* PDF export mode — applied via JS before createPDF capture. Only the
+       document goes in: the chrome and the card around it are dropped. */
+    body.print-mode #titlebar,
     body.print-mode #sidebar,
+    body.print-mode #sidebar-scrim,
     body.print-mode #outline,
-    body.print-mode #empty-state,
+    body.print-mode #home,
+    body.print-mode #folder-view,
+    body.print-mode #load-error,
+    body.print-mode #slow-read-notice,
+    body.print-mode #content-loading,
     body.print-mode .copy-btn,
     body.print-mode .mermaid-fullscreen-btn {
       display: none !important;
@@ -1854,6 +2763,17 @@
       display: block;
       height: auto;
       overflow: visible;
+      background: var(--bg);
+    }
+    body.print-mode #main,
+    body.print-mode #doc-card {
+      display: block !important;
+      height: auto;
+      overflow: visible;
+      margin: 0;
+      border: none;
+      border-radius: 0;
+      box-shadow: none;
     }
     body.print-mode #content {
       overflow: visible;
@@ -1934,48 +2854,27 @@
   </head>
   <body>
     <div id="titlebar" data-tauri-drag-region>
-      <div id="titlebar-title" data-tauri-drag-region>
-        <span id="titlebar-filename" data-tauri-drag-region></span>
+      <div id="titlebar-nav">
+        <button id="sidebar-toggle" class="key-btn" type="button" aria-expanded="false" aria-controls="sidebar" data-i18n-title="sidebar.toggle" data-i18n-aria-label="sidebar.toggle">
+          <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>
+        </button>
+        <button id="nav-back" class="key-btn" type="button" disabled data-i18n-title="nav.back" data-i18n-aria-label="nav.back">
+          <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>
+        </button>
+        <button id="nav-forward" class="key-btn" type="button" disabled data-i18n-title="nav.forward" data-i18n-aria-label="nav.forward">
+          <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+        </button>
+        <button id="nav-home" class="key-btn key-btn--label" type="button" data-i18n-title="nav.home.title">
+          <svg class="icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/></svg>
+          <span data-i18n="nav.home">Accueil</span>
+        </button>
       </div>
+      <nav id="breadcrumb" data-i18n-aria-label="breadcrumb.label"></nav>
+      <div id="titlebar-spacer" data-tauri-drag-region></div>
       <div id="titlebar-actions">
-        <button id="pdf-btn" data-i18n-title="titlebar.pdf">
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <path
-              d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"
-            />
-            <polyline points="14 2 14 8 20 8" />
-            <line x1="12" y1="18" x2="12" y2="12" />
-            <polyline points="9 15 12 18 15 15" />
-          </svg>
+        <button id="search-toggle" class="icon-btn" type="button" data-i18n-title="search.open" data-i18n-aria-label="search.open">
+          <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
         </button>
-        <button id="print-btn" data-i18n-title="titlebar.print">
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <path d="M6 9V2h12v7" />
-            <path
-              d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"
-            />
-            <rect x="6" y="14" width="12" height="8" />
-          </svg>
-        </button>
-        <button id="theme-toggle" data-i18n-title="titlebar.theme"></button>
         <div id="search-box">
           <svg
             class="search-icon"
@@ -1985,43 +2884,37 @@
             stroke-width="2"
             stroke-linecap="round"
             stroke-linejoin="round"
+            aria-hidden="true"
           >
-            <circle cx="11" cy="11" r="8" />
-            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            <circle cx="11" cy="11" r="7" />
+            <path d="m20 20-3.5-3.5" />
           </svg>
           <input
             id="search-input"
             type="search"
             data-i18n-placeholder="search.placeholder"
+            data-i18n-aria-label="search.placeholder"
             autocomplete="off"
             spellcheck="false"
             disabled
           >
           <span id="search-counter"></span>
-          <button
-            class="search-btn"
-            id="search-prev"
-            data-i18n-title="search.prev"
-            disabled
-          >
-            ↑
+          <button class="search-btn" id="search-prev" type="button" data-i18n-title="search.prev" data-i18n-aria-label="search.prev" disabled>
+            <svg class="icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18 15-6-6-6 6"/></svg>
           </button>
-          <button
-            class="search-btn"
-            id="search-next"
-            data-i18n-title="search.next"
-            disabled
-          >
-            ↓
+          <button class="search-btn" id="search-next" type="button" data-i18n-title="search.next" data-i18n-aria-label="search.next" disabled>
+            <svg class="icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
           </button>
           <button
             class="search-btn"
             id="search-options-btn"
+            type="button"
             data-i18n-title="search.options"
+            data-i18n-aria-label="search.options"
             aria-haspopup="menu"
             aria-expanded="false"
           >
-            ⚙
+            <svg class="icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>
           </button>
         </div>
         <div id="search-options-menu">
@@ -2038,54 +2931,75 @@
             <span data-i18n="search.opt.wholeword">Mot entier</span>
           </label>
         </div>
+        <button id="outline-toggle" class="icon-btn" type="button" aria-expanded="false" aria-controls="outline" data-i18n-title="nav.outline" data-i18n-aria-label="nav.outline">
+          <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+        </button>
+        <button id="pdf-btn" class="icon-btn" type="button" disabled data-i18n-title="titlebar.pdf" data-i18n-aria-label="titlebar.pdf">
+          <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+        </button>
+        <button id="print-btn" class="icon-btn" type="button" disabled data-i18n-title="titlebar.print" data-i18n-aria-label="titlebar.print">
+          <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9V3h12v6"/><rect x="6" y="14" width="12" height="7"/><path d="M6 18H4a1 1 0 0 1-1-1v-6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v6a1 1 0 0 1-1 1h-2"/></svg>
+        </button>
+        <button id="theme-toggle" class="icon-btn" type="button" data-i18n-title="titlebar.theme" data-i18n-aria-label="titlebar.theme"></button>
+        <button id="prefs-btn" class="icon-btn" type="button" data-i18n-title="titlebar.preferences" data-i18n-aria-label="titlebar.preferences">
+          <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>
+        </button>
       </div>
     </div>
 
     <div id="main">
-      <div id="sidebar">
+      <div id="sidebar-scrim" hidden></div>
+      <aside id="sidebar" data-i18n-aria-label="sidebar.documents">
         <div id="sidebar-header">
-          <div id="sidebar-top">
-            <h2 data-i18n="app.name">Markdown Viewer</h2>
-          </div>
-          <div id="breadcrumb"></div>
+          <button id="folder-switcher" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="folder-menu">
+            <span class="fs-text">
+              <span id="folder-switcher-name"></span>
+              <span id="folder-switcher-path" class="mono"></span>
+            </span>
+            <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
+          </button>
+          <button id="sidebar-close" class="icon-btn" type="button" data-i18n-title="sidebar.close" data-i18n-aria-label="sidebar.close">
+            <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+          <div id="folder-menu" role="menu" hidden></div>
+        </div>
+        <div id="sidebar-label">
+          <span data-i18n="sidebar.documents">Documents</span>
+          <span id="sidebar-count"></span>
         </div>
         <div id="file-list"></div>
-      </div>
+      </aside>
 
-      <div id="content" class="empty">
-        <div id="empty-state">
-          <h2 data-i18n="app.name">Markdown Viewer</h2>
-          <p data-i18n="empty.subtitle">
-            Open a folder to browse your documentation.
-          </p>
-          <div id="empty-state-buttons">
-            <button id="open-btn" data-i18n="empty.open">Open folder</button>
-            <button id="examples-btn" data-i18n="empty.examples">
-              View examples
+      <section id="home" data-i18n-aria-label="nav.home"></section>
+      <section id="folder-view" hidden></section>
+
+      <div id="doc-card" hidden>
+        <div id="content">
+          <div id="load-error" hidden role="alert">
+            <span class="srn-text" id="load-error-text"></span>
+          </div>
+          <div id="slow-read-notice" hidden>
+            <span class="srn-text" data-i18n="slowRead.message"></span>
+            <button
+              class="srn-close"
+              id="slow-read-dismiss"
+              type="button"
+              data-i18n-title="slowRead.dismiss"
+              data-i18n-aria-label="slowRead.dismiss"
+            >
+              <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
             </button>
           </div>
+          <div id="markdown"></div>
+          <div id="content-loading" hidden>
+            <div class="content-loading-spinner"></div>
+          </div>
         </div>
-        <div id="load-error" hidden>
-          <span class="srn-text" id="load-error-text"></span>
-        </div>
-        <div id="slow-read-notice" hidden>
-          <span class="srn-text" data-i18n="slowRead.message"></span>
-          <button
-            class="srn-close"
-            id="slow-read-dismiss"
-            data-i18n-title="slowRead.dismiss"
-            aria-label="Dismiss"
-          >✕</button>
-        </div>
-        <div id="markdown" style="display:none"></div>
-        <div id="content-loading" hidden>
-          <div class="content-loading-spinner"></div>
-        </div>
-      </div>
 
-      <div id="outline">
-        <div id="outline-title" data-i18n="outline.title">On this page</div>
-        <nav id="outline-nav"></nav>
+        <aside id="outline" data-i18n-aria-label="outline.title">
+          <div id="outline-title" data-i18n="outline.title">Sur cette page</div>
+          <nav id="outline-nav"></nav>
+        </aside>
       </div>
     </div>
 
@@ -2484,6 +3398,24 @@
                 </button>
                 <button type="button" data-value="reuse" data-i18n="prefs.finderOpen.reuse">
                   Fenêtre actuelle
+                </button>
+              </div>
+            </div>
+            <div class="prefs-row">
+              <div class="prefs-label">
+                <span class="prefs-label-title" data-i18n="prefs.general.launch.title">
+                  Au lancement
+                </span>
+                <span class="prefs-label-hint" data-i18n="prefs.general.launch.hint">
+                  Quand rien d'autre n'est ouvert
+                </span>
+              </div>
+              <div class="prefs-segment" id="prefs-launch" role="radiogroup">
+                <button type="button" data-value="home" data-i18n="prefs.launch.home">
+                  Accueil
+                </button>
+                <button type="button" data-value="last-folder" data-i18n="prefs.launch.lastFolder">
+                  Dernier dossier
                 </button>
               </div>
             </div>

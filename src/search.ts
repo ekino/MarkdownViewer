@@ -22,7 +22,10 @@ export interface SearchController {
   prev: () => void;
   setOptions: (opts: Partial<SearchOptions>) => void;
   getOptions: () => SearchOptions;
-  reset: () => void;
+  /** Rebuild on new content; `scroll: false` keeps the reader where they are. */
+  reset: (options?: { scroll?: boolean }) => void;
+  /** Drop the index and highlights of content that is being replaced. */
+  suspend: () => void;
   clear: () => void;
   getState: () => SearchState;
   refocusCurrent: () => void;
@@ -421,7 +424,7 @@ export function createSearchController(
     el?.scrollIntoView?.({ block: "center", behavior: "smooth" });
   }
 
-  function recompute(): void {
+  function recompute(scroll = true): void {
     if (!supportsCSSHighlights) {
       clearHighlights();
     }
@@ -433,7 +436,7 @@ export function createSearchController(
       .filter((r): r is Range => r !== null);
     currentIndex = ranges.length > 0 ? 0 : -1;
     applyHighlights();
-    scrollToCurrent();
+    if (scroll) scrollToCurrent();
     notify();
   }
 
@@ -479,7 +482,16 @@ export function createSearchController(
     }
   }
 
-  function reset(): void {
+  function suspend(): void {
+    debouncedSetQuery.cancel();
+    index = null;
+    ranges = [];
+    currentIndex = -1;
+    clearHighlights();
+    notify();
+  }
+
+  function reset(resetOptions: { scroll?: boolean } = {}): void {
     debouncedSetQuery.cancel();
     index = null;
     ranges = [];
@@ -490,7 +502,7 @@ export function createSearchController(
     query = ui.input.value;
     clearHighlights();
     if (query) {
-      recompute();
+      recompute(resetOptions.scroll ?? true);
     } else {
       notify();
     }
@@ -530,6 +542,7 @@ export function createSearchController(
     setOptions,
     getOptions: () => ({ ...options }),
     reset,
+    suspend,
     clear,
     getState,
     refocusCurrent: scrollToCurrent,

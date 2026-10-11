@@ -69,13 +69,13 @@ describe("t() — lookup and fallback", () => {
   it("returns the FR string when current locale is fr", () => {
     setLocale("fr");
     expect(t("prefs.tab.general")).toBe("Général");
-    expect(t("empty.open")).toBe("Ouvrir un dossier");
+    expect(t("home.openFolder")).toBe("Ouvrir un dossier");
   });
 
   it("returns the EN string when current locale is en", () => {
     setLocale("en");
     expect(t("prefs.tab.general")).toBe("General");
-    expect(t("empty.open")).toBe("Open folder");
+    expect(t("home.openFolder")).toBe("Open a folder");
   });
 
   it("an explicit locale arg overrides the current locale", () => {
@@ -192,7 +192,7 @@ describe("FR and EN catalogs — parity", () => {
     "prefs.tab.appearance",
     "prefs.general.language.title",
     "prefs.appearance.follow",
-    "empty.open",
+    "home.openFolder",
     "titlebar.print",
   ];
 
@@ -230,5 +230,38 @@ describe("JSON catalog parity", () => {
         expect(v.length, `${locale}.${k}`).toBeGreaterThan(0);
       }
     }
+  });
+});
+
+describe("every key the app uses exists in both catalogs", () => {
+  // Static scan of the sources: t("key") calls, data-i18n* attributes and the
+  // `home.resume.${status}` / `folder.${status}` families built at runtime.
+  it("has no missing or one-sided key", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const root = path.resolve(__dirname, "..");
+    const sources = [
+      ...fs.readdirSync(path.join(root, "src"))
+        .filter((f: string) => f.endsWith(".ts") && !f.endsWith(".test.ts"))
+        .map((f: string) => fs.readFileSync(path.join(root, "src", f), "utf8")),
+      fs.readFileSync(path.join(root, "index.html"), "utf8"),
+    ].join("\n");
+    const keys = new Set<string>();
+    for (const m of sources.matchAll(/\bt\("([a-zA-Z0-9_.]+)"/g)) keys.add(m[1]);
+    for (const m of sources.matchAll(/data-i18n(?:-[a-z-]+)?="([a-zA-Z0-9_.]+)"/g)) keys.add(m[1]);
+    for (const status of ["missing", "denied"]) {
+      keys.add(`home.resume.${status}`);
+      keys.add(`home.resume.${status}.hint`);
+    }
+    for (const status of ["missing", "denied", "error"]) keys.add(`folder.${status}`);
+    for (const kind of ["file", "folder"]) keys.add(`home.recent.${kind}`);
+    keys.delete("key"); // the placeholder in i18n.ts's own documentation
+    const missing: string[] = [];
+    for (const key of keys) {
+      for (const locale of ["fr", "en"] as const) {
+        if (!(key in getCatalog(locale))) missing.push(`${locale}:${key}`);
+      }
+    }
+    expect(missing).toEqual([]);
   });
 });

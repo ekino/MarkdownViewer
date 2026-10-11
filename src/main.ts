@@ -1,8 +1,13 @@
 import mermaid from "mermaid";
 import "katex/dist/katex.min.css";
+// The chrome's typefaces (Speakino's), bundled so they load offline and under the CSP.
+import "@fontsource-variable/bricolage-grotesque/opsz.css";
+import "@fontsource/dm-mono/400.css";
+import "@fontsource/dm-mono/500.css";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { resolveResource } from "@tauri-apps/api/path";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { readDir, readTextFile } from "@tauri-apps/plugin-fs";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -32,6 +37,7 @@ import {
   MAX_CUSTOM_FONT_SIZE,
   MIN_CUSTOM_FONT_SIZE,
   FINDER_OPEN_KEY,
+  LAUNCH_KEY,
   OUTLINE_PREF_KEY,
   applyBodyFontToDOM,
   applyCodeFontToDOM,
@@ -43,12 +49,14 @@ import {
   resolveInitialFontFamily,
   resolveInitialFontSize,
   resolveInitialFinderOpenPref,
+  resolveInitialLaunchPref,
   resolveInitialFontWeight,
   resolveInitialOutlinePref,
   setSegmentActive,
   type FinderOpenPref,
   type FontSize,
   type FontWeight,
+  type LaunchPref,
   type OutlinePref,
 } from "./preferences";
 import {
@@ -76,19 +84,36 @@ import {
   toHexForPicker,
 } from "./theme-editor";
 import { createSearchController, type SearchController } from "./search";
-import type { Entry, PendingOpen, RecentEntry } from "./utils";
+import type { Entry, LastRead, Listing, PendingOpen, RecentEntry } from "./utils";
 import {
+  MARKDOWN_EXTENSIONS,
   classifyLink,
+  decodeAnchor,
   extractRootName,
-  filterAndSortEntries,
   findReadme,
   getFullPath,
+  isLastRead,
+  isMarkdownName,
+  listingStatusFromError,
   mergeRecent,
   parseMarkdownHref,
   resolveInitialView,
   resolvePath,
+  shouldWriteLastRead,
+  summarizeListing,
   windowTitle,
 } from "./utils";
+import {
+  createNavigator,
+  returnTarget,
+  type CommitContext,
+  type DecorationContext,
+  type NavEntry,
+  type Navigator as WindowNavigator,
+  type Positioning,
+} from "./navigator";
+import { buildBreadcrumb, buildFileList, buildFolderView, buildHome, type HomeData } from "./screens";
+import { icon } from "./icons";
 
 // --- Theme & preferences management ---
 
@@ -105,6 +130,7 @@ let currentCodeFont: string | null = null;
 let currentFontWeight: FontWeight | null = null;
 let currentCustomFontSize: number | null = null;
 let finderOpenPref: FinderOpenPref = "new-window";
+let launchPref: LaunchPref = "home";
 const systemDarkMQ = window.matchMedia("(prefers-color-scheme: dark)");
 
 function isDark(): boolean {
@@ -124,7 +150,7 @@ function applyActiveTheme(): void {
   const id = activeThemeId();
   applyThemeToDOM(themeCatalog, document.documentElement, id);
   const dark = themeCatalog[id]?.isDark ?? false;
-  themeToggle.textContent = dark ? "\u2600\uFE0F" : "\u{1F319}";
+  themeToggle.innerHTML = icon(dark ? "sun" : "moon");
   mermaid.initialize({
     startOnLoad: false,
     theme: dark ? "dark" : "default",
@@ -203,27 +229,38 @@ async function initTheme(): Promise<void> {
 import { invoke } from "@tauri-apps/api/core";
 
 function printDocument(): void {
+  // Native menu items stay enabled; there is nothing to print without a document.
+  if (activeScreen() !== "doc") return;
   invoke("print_webview");
 }
 
+// The export captures the page as it is on screen, so navigation is held off
+// from the save dialog until the capture is done, and only one export runs at
+// a time.
 async function exportPdf(): Promise<void> {
-  const defaultName = activeFile
-    ? activeFile.split("/").pop()!.replace(/\.md$/i, ".pdf")
-    : "document.pdf";
+  if (activeScreen() !== "doc" || !activeFile) return;
+  await nav.runExclusive(async () => {
+    if (activeScreen() !== "doc" || !activeFile) return;
+    const defaultName = activeFile
+      .split("/")
+      .pop()!
+      .replace(/\.(md|markdown|mdx)$/i, ".pdf");
 
-  const outputPath = await save({
-    defaultPath: defaultName,
-    filters: [{ name: "PDF", extensions: ["pdf"] }],
+    const outputPath = await save({
+      defaultPath: defaultName,
+      filters: [{ name: "PDF", extensions: ["pdf"] }],
+    });
+    if (!outputPath) return;
+
+    await nav.decorationsDone();
+    document.body.classList.add("print-mode");
+    try {
+      await new Promise((r) => setTimeout(r, 150));
+      await invoke("export_pdf", { outputPath });
+    } finally {
+      document.body.classList.remove("print-mode");
+    }
   });
-  if (!outputPath) return;
-
-  document.body.classList.add("print-mode");
-  try {
-    await new Promise((r) => setTimeout(r, 150));
-    await invoke("export_pdf", { outputPath });
-  } finally {
-    document.body.classList.remove("print-mode");
-  }
 }
 
 async function toggleTheme(): Promise<void> {
@@ -250,30 +287,37 @@ themeToggle.addEventListener("click", toggleTheme);
 
 let mermaidCounter = 0;
 
-async function renderMermaidDiagrams(): Promise<void> {
+async function renderMermaidDiagrams(isCurrent: () => boolean = () => true): Promise<void> {
   const codeBlocks = markdownEl.querySelectorAll("pre > code.language-mermaid");
   if (codeBlocks.length === 0) return;
 
   for (const codeBlock of codeBlocks) {
+    // Rendering is async: stop as soon as another view has replaced this one.
+    if (!isCurrent()) return;
     const pre = codeBlock.parentElement!;
     const source = codeBlock.textContent ?? "";
     const id = `mermaid-${++mermaidCounter}`;
 
-    let title = "Diagram";
+    let title = t("mermaid.diagram");
     const prevEl = pre.previousElementSibling;
     if (prevEl && /^H[2-4]$/.test(prevEl.tagName)) {
-      title = prevEl.textContent ?? "Diagram";
+      title = prevEl.textContent ?? title;
     }
 
     try {
       const { svg } = await mermaid.render(id, source);
+      if (!isCurrent()) {
+        document.getElementById(id)?.remove();
+        return;
+      }
 
       const wrapper = document.createElement("div");
       wrapper.className = "mermaid-wrapper";
 
       const btn = document.createElement("button");
       btn.className = "mermaid-fullscreen-btn";
-      btn.innerHTML = "<span>&#x26F6;</span> Fullscreen";
+      btn.type = "button";
+      btn.textContent = t("mermaid.fullscreen");
       btn.addEventListener("click", () => openMermaidFullscreen(svg, title));
 
       const preview = document.createElement("div");
@@ -295,6 +339,7 @@ async function renderMermaidDiagrams(): Promise<void> {
         }
       });
     } catch (e) {
+      if (!isCurrent()) return;
       console.warn("Mermaid render failed for diagram", id, e);
       const errWrapper = document.createElement("div");
       errWrapper.className = "mermaid-wrapper";
@@ -409,9 +454,26 @@ function openMermaidFullscreen(svgContent: string, title: string): void {
 }
 
 const fileList = document.getElementById("file-list") as HTMLDivElement;
-const breadcrumb = document.getElementById("breadcrumb") as HTMLDivElement;
+const breadcrumb = document.getElementById("breadcrumb") as HTMLElement;
 const markdownEl = document.getElementById("markdown") as HTMLDivElement;
-const emptyState = document.getElementById("empty-state") as HTMLDivElement;
+const homeEl = document.getElementById("home") as HTMLElement;
+const folderViewEl = document.getElementById("folder-view") as HTMLElement;
+const docCard = document.getElementById("doc-card") as HTMLDivElement;
+const sidebarEl = document.getElementById("sidebar") as HTMLDivElement;
+const sidebarScrim = document.getElementById("sidebar-scrim") as HTMLDivElement;
+const sidebarCount = document.getElementById("sidebar-count") as HTMLSpanElement;
+const folderSwitcher = document.getElementById("folder-switcher") as HTMLButtonElement;
+const folderSwitcherName = document.getElementById("folder-switcher-name") as HTMLSpanElement;
+const folderSwitcherPath = document.getElementById("folder-switcher-path") as HTMLSpanElement;
+const folderMenu = document.getElementById("folder-menu") as HTMLDivElement;
+const navBackBtn = document.getElementById("nav-back") as HTMLButtonElement;
+const navForwardBtn = document.getElementById("nav-forward") as HTMLButtonElement;
+const navHomeBtn = document.getElementById("nav-home") as HTMLButtonElement;
+const sidebarToggle = document.getElementById("sidebar-toggle") as HTMLButtonElement;
+const sidebarClose = document.getElementById("sidebar-close") as HTMLButtonElement;
+const outlineToggle = document.getElementById("outline-toggle") as HTMLButtonElement;
+const searchToggle = document.getElementById("search-toggle") as HTMLButtonElement;
+const prefsBtn = document.getElementById("prefs-btn") as HTMLButtonElement;
 const contentEl = document.getElementById("content") as HTMLDivElement;
 const contentLoading = document.getElementById(
   "content-loading"
@@ -426,15 +488,8 @@ const loadError = document.getElementById("load-error") as HTMLDivElement;
 const loadErrorText = document.getElementById(
   "load-error-text"
 ) as HTMLSpanElement;
-const openBtn = document.getElementById("open-btn") as HTMLButtonElement;
-const examplesBtn = document.getElementById(
-  "examples-btn"
-) as HTMLButtonElement;
 const outlineEl = document.getElementById("outline") as HTMLDivElement;
 const outlineNav = document.getElementById("outline-nav") as HTMLElement;
-const titlebarFilename = document.getElementById(
-  "titlebar-filename"
-) as HTMLSpanElement;
 const searchInput = document.getElementById("search-input") as HTMLInputElement;
 const searchCounter = document.getElementById(
   "search-counter"
@@ -469,6 +524,8 @@ function syncWindowTitle(): void {
   }).catch((e) => console.warn("Failed to set the window title:", e));
 }
 
+// --- Window state ---
+// What the committed view shows. Only the navigator's publish step writes these.
 let rootPath: string | null = null;
 let rootName = "";
 let currentPath: string[] = [];
@@ -478,6 +535,7 @@ let scrollObserver: IntersectionObserver | null = null;
 const STORE_FILE = "settings.json";
 const STORE_KEY = "lastFolder";
 const RECENT_KEY = "recentEntries";
+const LAST_READ_KEY = "lastRead";
 const RECENT_MAX = 10;
 
 // --- Store persistence ---
@@ -525,23 +583,72 @@ async function clearRecents(): Promise<void> {
   await store.set(RECENT_KEY, []);
   await store.save();
   await syncRecentMenu([]);
+  if (activeScreen() === "home") void refreshHome();
 }
 
-// --- Init ---
+// --- Last document read ("Reprendre") ---
+// Shared by every window through the store. Written only on reading activity
+// (opening a document, scrolling it), never when a window closes, so a window
+// left on an old document cannot pass it off as the latest read.
 
-openBtn.addEventListener("click", openFolder);
-examplesBtn.addEventListener("click", openExamples);
+async function loadLastRead(): Promise<LastRead | null> {
+  const store = await load(STORE_FILE);
+  const value = await store.get(LAST_READ_KEY);
+  return isLastRead(value) ? value : null;
+}
+
+async function writeLastRead(next: LastRead): Promise<void> {
+  try {
+    const store = await load(STORE_FILE);
+    if (!shouldWriteLastRead(await store.get(LAST_READ_KEY), next)) return;
+    await store.set(LAST_READ_KEY, next);
+    await store.save();
+  } catch (e) {
+    console.warn("Failed to save the last document read:", e);
+  }
+}
+
+let lastReadTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingLastRead: LastRead | null = null;
+
+function scheduleLastRead(snapshot: LastRead): void {
+  pendingLastRead = snapshot;
+  if (lastReadTimer !== null) clearTimeout(lastReadTimer);
+  lastReadTimer = setTimeout(() => {
+    lastReadTimer = null;
+    if (pendingLastRead) void writeLastRead(pendingLastRead);
+    pendingLastRead = null;
+  }, 1000);
+}
+
+// --- Opening folders and files ---
+
+async function openFolderPath(path: string): Promise<void> {
+  const ok = await nav.navigate({ kind: "folder", rootPath: path, dir: [] });
+  if (ok) {
+    await saveRootPath(path);
+    await recordRecent(path, "folder");
+  }
+}
 
 async function openExamples(): Promise<void> {
   const examplesPath = await resolveResource("examples");
-  await setRootPath(examplesPath);
+  await openFolderPath(examplesPath);
+}
+
+function docEntry(root: string, file: string, anchor?: string): NavEntry {
+  return { kind: "doc", rootPath: root, dir: file.split("/").slice(0, -1), file, anchor };
 }
 
 async function openFileFromPath(filePath: string): Promise<void> {
   const lastSep = filePath.lastIndexOf("/");
   const parentDir = filePath.substring(0, lastSep);
   const fileName = filePath.substring(lastSep + 1);
-  await setRootPath(parentDir, fileName);
+  const ok = await nav.navigate(docEntry(parentDir, fileName));
+  if (ok) {
+    await saveRootPath(parentDir);
+    await recordRecent(filePath, "file");
+  }
 }
 
 // --- Debug HUD ---
@@ -680,6 +787,7 @@ const prefsOutline = document.getElementById("prefs-outline") as HTMLDivElement;
 const prefsFinderOpen = document.getElementById(
   "prefs-finder-open"
 ) as HTMLDivElement;
+const prefsLaunch = document.getElementById("prefs-launch") as HTMLDivElement;
 const prefsTabs = document.querySelectorAll<HTMLButtonElement>(".prefs-tab");
 const prefsTabPanels =
   document.querySelectorAll<HTMLDivElement>(".prefs-tab-panel");
@@ -793,6 +901,7 @@ function syncPrefsUI(): void {
     (document.documentElement.dataset.outline as OutlinePref) ?? "auto"
   );
   setSegmentActive(prefsFinderOpen, finderOpenPref);
+  setSegmentActive(prefsLaunch, launchPref);
   prefsBodyFont.value = currentBodyFont ?? "";
   prefsCodeFont.value = currentCodeFont ?? "";
   prefsFontWeight.value = currentFontWeight ?? "";
@@ -1443,6 +1552,15 @@ function initPreferences(): void {
     });
   }
 
+  for (const btn of prefsLaunch.querySelectorAll<HTMLButtonElement>("button")) {
+    btn.addEventListener("click", async () => {
+      const value = btn.dataset.value as LaunchPref;
+      launchPref = value;
+      setSegmentActive(prefsLaunch, value);
+      await savePref(LAUNCH_KEY, value);
+    });
+  }
+
   prefsAdvancedToggle.addEventListener("click", () => {
     const open = !prefsAdvanced.classList.contains("visible");
     setAdvancedOpen(open);
@@ -1514,114 +1632,295 @@ async function initLocale(): Promise<void> {
   document.documentElement.lang = locale;
 }
 
+// --- Chrome: sidebar overlay, folder menu, outline popover ---
+
+const NARROW_SIDEBAR = 860;
+let sidebarOpener: HTMLElement | null = null;
+
+function setSidebarOpen(open: boolean): void {
+  const wasOpen = document.body.classList.contains("sidebar-open");
+  if (open === wasOpen) return;
+  document.body.classList.toggle("sidebar-open", open);
+  sidebarToggle.setAttribute("aria-expanded", String(open));
+  sidebarScrim.hidden = !open;
+  // While the panel covers the page, the page behind it is out of reach.
+  for (const el of [document.getElementById("titlebar"), docCard, folderViewEl]) {
+    if (el) el.inert = open;
+  }
+  if (open) {
+    sidebarEl.setAttribute("role", "dialog");
+    sidebarEl.setAttribute("aria-modal", "true");
+    sidebarOpener = document.activeElement as HTMLElement | null;
+    (sidebarEl.querySelector<HTMLElement>(".file-item.active, .file-item") ?? sidebarClose).focus();
+  } else {
+    sidebarEl.removeAttribute("role");
+    sidebarEl.removeAttribute("aria-modal");
+    sidebarOpener?.focus();
+    sidebarOpener = null;
+  }
+}
+
+function setOutlineOpen(open: boolean): void {
+  document.body.classList.toggle("outline-open", open);
+  outlineToggle.setAttribute("aria-expanded", String(open));
+  if (open) outlineNav.querySelector<HTMLElement>(".outline-item")?.focus();
+}
+
+function closeFolderMenu(returnFocus = false): void {
+  if (folderMenu.hidden) return;
+  folderMenu.hidden = true;
+  folderSwitcher.setAttribute("aria-expanded", "false");
+  if (returnFocus) folderSwitcher.focus();
+}
+
+/** Close every popover and panel; a new view never opens under one. */
+function closeTransientUI(): void {
+  closeFolderMenu();
+  setOutlineOpen(false);
+  setSidebarOpen(false);
+}
+
+function menuItem(label: string, onSelect: () => void, shortcut?: string, checked = false): HTMLButtonElement {
+  const item = document.createElement("button");
+  item.type = "button";
+  item.className = "menu-item";
+  item.setAttribute("role", checked ? "menuitemradio" : "menuitem");
+  if (checked) item.setAttribute("aria-checked", "true");
+  const text = document.createElement("span");
+  text.className = "menu-item-label";
+  text.textContent = label;
+  item.append(text);
+  if (checked) item.insertAdjacentHTML("beforeend", icon("check", 14));
+  if (shortcut) {
+    const k = document.createElement("span");
+    k.className = "menu-item-shortcut mono";
+    k.textContent = shortcut;
+    item.append(k);
+  }
+  item.addEventListener("click", () => {
+    closeFolderMenu(true);
+    onSelect();
+  });
+  return item;
+}
+
+async function openFolderMenu(): Promise<void> {
+  const recents = (await loadRecents()).filter((e) => e.kind === "folder").slice(0, 5);
+  const items: HTMLElement[] = [];
+  if (recents.length > 0) {
+    const label = document.createElement("div");
+    label.className = "menu-label";
+    label.textContent = t("folderMenu.recents");
+    items.push(label);
+    for (const entry of recents) {
+      items.push(
+        menuItem(extractRootName(entry.path), () => void openFolderPath(entry.path), undefined, entry.path === rootPath)
+      );
+    }
+    items.push(Object.assign(document.createElement("div"), { className: "menu-sep" }));
+  }
+  items.push(menuItem(t("folderMenu.open"), () => void openFolder(), "⇧⌘O"));
+  items.push(menuItem(t("folderMenu.newWindow"), () => void openFolderInNewWindow(), "⇧⌘N"));
+  items.push(Object.assign(document.createElement("div"), { className: "menu-sep" }));
+  items.push(menuItem(t("folder.close"), closeFolder, "⇧⌘W"));
+  folderMenu.replaceChildren(...items);
+  folderMenu.hidden = false;
+  folderSwitcher.setAttribute("aria-expanded", "true");
+  folderMenu.querySelector<HTMLElement>(".menu-item")?.focus();
+}
+
+folderMenu.addEventListener("keydown", (e) => {
+  const items = Array.from(folderMenu.querySelectorAll<HTMLElement>(".menu-item"));
+  const index = items.indexOf(document.activeElement as HTMLElement);
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    const step = e.key === "ArrowDown" ? 1 : -1;
+    items[(index + step + items.length) % items.length]?.focus();
+  } else if (e.key === "Home" || e.key === "End") {
+    e.preventDefault();
+    items[e.key === "Home" ? 0 : items.length - 1]?.focus();
+  } else if (e.key === "Escape") {
+    e.preventDefault();
+    closeFolderMenu(true);
+  } else if (e.key === "Tab") {
+    closeFolderMenu();
+  }
+});
+
+document.addEventListener("click", (e) => {
+  const target = e.target as Node;
+  if (!folderMenu.hidden && !folderMenu.contains(target) && !folderSwitcher.contains(target)) {
+    closeFolderMenu();
+  }
+  if (
+    document.body.classList.contains("outline-open") &&
+    !outlineEl.contains(target) &&
+    !outlineToggle.contains(target)
+  ) {
+    setOutlineOpen(false);
+  }
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || modalOpen()) return;
+  if (document.body.classList.contains("sidebar-open")) {
+    setSidebarOpen(false);
+  } else if (document.body.classList.contains("outline-open")) {
+    setOutlineOpen(false);
+    outlineToggle.focus();
+  }
+});
+
+function initChrome(): void {
+  navBackBtn.addEventListener("click", () => void nav.back());
+  navForwardBtn.addEventListener("click", () => void nav.forward());
+  navHomeBtn.addEventListener("click", goHome);
+  sidebarToggle.addEventListener("click", () => setSidebarOpen(!document.body.classList.contains("sidebar-open")));
+  sidebarClose.addEventListener("click", () => setSidebarOpen(false));
+  sidebarScrim.addEventListener("click", () => setSidebarOpen(false));
+  outlineToggle.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setOutlineOpen(!document.body.classList.contains("outline-open"));
+  });
+  searchToggle.addEventListener("click", () => {
+    document.body.classList.add("search-open");
+    focusSearch();
+  });
+  searchInput.addEventListener("blur", () => {
+    if (!searchInput.value) document.body.classList.remove("search-open");
+  });
+  prefsBtn.addEventListener("click", openPrefs);
+  folderSwitcher.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (folderMenu.hidden) void openFolderMenu();
+    else closeFolderMenu(true);
+  });
+  window.addEventListener("resize", () => {
+    if (window.innerWidth > NARROW_SIDEBAR) setSidebarOpen(false);
+  });
+  // The window shows what other windows did meanwhile (recents, last read).
+  window.addEventListener("focus", () => {
+    if (activeScreen() === "home") void refreshHome();
+  });
+  syncNavButtons();
+}
+
+// --- Init ---
+
 async function init(): Promise<void> {
+  // 1. Preferences that decide where opens go, before anything can open.
+  const routingStore = await load(STORE_FILE);
+  finderOpenPref = resolveInitialFinderOpenPref(await routingStore.get(FINDER_OPEN_KEY));
+  launchPref = resolveInitialLaunchPref(await routingStore.get(LAUNCH_KEY));
+
+  // 2. Reserve the startup view: anything opened from now on wins over it.
+  const commitInitial = nav.reserveInitial();
+
+  // 3. Runtime opens (hot-start file association, "Open With", CLI events) and menus.
+  await Promise.all([
+    appWindow.listen<string>("open-folder", (event) => {
+      void openFolderPath(event.payload);
+    }),
+    appWindow.listen<string>("open-file", (event) => {
+      // The backend routes this to the frontmost window only. Reusing it would
+      // discard whatever that window holds, so by default hand the document to
+      // a new window — unless this one is empty, where spawning would just
+      // leave an empty window behind.
+      if (finderOpenPref === "new-window" && windowInUse()) {
+        void invoke("open_new_window", { path: event.payload }).catch((e) => {
+          console.warn("Failed to open a new window, reusing this one:", e);
+          void openFileFromPath(event.payload);
+        });
+        return;
+      }
+      void openFileFromPath(event.payload);
+    }),
+    appWindow.listen("menu-open-folder", () => openFolder()),
+    appWindow.listen("menu-open-file", () => openFile()),
+    appWindow.listen("menu-open-folder-new-window", () => openFolderInNewWindow()),
+    appWindow.listen("menu-print", () => printDocument()),
+    appWindow.listen("menu-export-pdf", () => exportPdf()),
+    appWindow.listen("menu-toggle-theme", () => toggleTheme()),
+    appWindow.listen<RecentEntry>("menu-open-recent", (event) => openRecent(event.payload)),
+    appWindow.listen("menu-clear-recent", () => clearRecents()),
+    appWindow.listen("menu-open-preferences", () => openPrefs()),
+    appWindow.listen("menu-find", () => focusSearch()),
+    appWindow.listen<string>("menu-nav", (event) => handleNavCommand(event.payload)),
+    getCurrentWebview().onDragDropEvent((event) => {
+      document.body.classList.toggle("drag-over", event.payload.type === "over" || event.payload.type === "enter");
+      if (event.payload.type === "drop" && event.payload.paths.length > 0) {
+        void openDroppedPath(event.payload.paths[0]);
+      }
+    }),
+  ]);
+
+  // 4. The rest of the window.
   await initLocale();
   await initTheme();
   initSearch();
   initPreferences();
-
-  // Runtime opens (hot-start file association, "Open With", CLI events)
-  appWindow.listen<string>("open-folder", (event) => {
-    setRootPath(event.payload);
-  });
-  appWindow.listen<string>("open-file", (event) => {
-    // The backend routes this to the frontmost window only. Reusing it would
-    // discard whatever that window was showing, so by default hand the document
-    // to a new window — unless this one is still on the welcome screen, where
-    // spawning would just leave an empty window behind.
-    if (finderOpenPref === "new-window" && activeFile !== null) {
-      void invoke("open_new_window", { path: event.payload }).catch((e) => {
-        console.warn("Failed to open a new window, reusing this one:", e);
-        openFileFromPath(event.payload);
-      });
-      return;
-    }
-    openFileFromPath(event.payload);
-  });
-  appWindow.listen("menu-open-folder", () => {
-    openFolder();
-  });
-  appWindow.listen("menu-open-file", () => {
-    openFile();
-  });
-  appWindow.listen("menu-open-folder-new-window", () => {
-    openFolderInNewWindow();
-  });
-  appWindow.listen("menu-print", () => {
-    printDocument();
-  });
-  appWindow.listen("menu-export-pdf", () => {
-    exportPdf();
-  });
-  appWindow.listen("menu-toggle-theme", () => {
-    toggleTheme();
-  });
-  appWindow.listen<RecentEntry>("menu-open-recent", (event) => {
-    if (event.payload.kind === "file") {
-      openFileFromPath(event.payload.path);
-    } else {
-      setRootPath(event.payload.path);
-    }
-  });
-  appWindow.listen("menu-clear-recent", () => {
-    clearRecents();
-  });
-  appWindow.listen("menu-open-preferences", () => {
-    openPrefs();
-  });
-  appWindow.listen("menu-find", () => {
-    focusSearch();
-  });
+  initChrome();
 
   // Populate the native "Open Recent" submenu from the persisted list.
   await syncRecentMenu(await loadRecents());
 
-  // Pull anything the backend buffered for *this* window: a CLI arg, a
-  // RunEvent::Opened that fired before our listener was registered, or the
-  // folder handed to a window spawned from the File menu.
+  // 5. The startup view. Pull anything the backend buffered for *this* window:
+  // a CLI arg, a RunEvent::Opened that fired before our listener was
+  // registered, or the folder handed to a window spawned from the File menu.
   const pending = await invoke<PendingOpen | null>("get_pending_open");
-  const view = resolveInitialView(pending, await loadRootPath());
+  const view = resolveInitialView(pending, await loadRootPath(), launchPref === "last-folder");
+  let target: NavEntry = { kind: "home", rootPath: null, dir: [] };
   if (view.kind === "file") {
-    await openFileFromPath(view.path);
+    const sep = view.path.lastIndexOf("/");
+    target = docEntry(view.path.substring(0, sep), view.path.substring(sep + 1));
   } else if (view.kind === "folder") {
-    await setRootPath(view.path);
+    target = { kind: "folder", rootPath: view.path, dir: [] };
   }
-  // "welcome": nothing to do, the empty state is what index.html starts on.
+  const ok = await commitInitial(target);
+  if (ok && view.kind === "file") await recordRecent(view.path, "file");
+  if (ok && view.kind === "folder") await recordRecent(view.path, "folder");
+  // A startup document that cannot be read still leaves the window usable.
+  if (!ok && !nav.state().current && nav.pending() === 0) {
+    await nav.navigate({ kind: "home", rootPath: null, dir: [] });
+  }
 }
 
-async function setRootPath(path: string, fileToOpen?: string): Promise<void> {
-  rootPath = path;
-  rootName = extractRootName(path);
-  currentPath = [];
-  activeFile = null;
-  await saveRootPath(path);
-  if (fileToOpen) {
-    await recordRecent(`${path}/${fileToOpen}`, "file");
-  } else {
-    await recordRecent(path, "folder");
-  }
-  await renderSidebar();
-  if (fileToOpen) {
-    await loadFile(fileToOpen);
-  } else {
-    await autoSelectReadme();
-  }
+/** A window holds something the reader may want to keep: a folder, or an open in progress. */
+function windowInUse(): boolean {
+  return rootPath !== null || nav.pending() > 0;
 }
 
 async function openFolder(): Promise<void> {
   const selected = await open({ directory: true, multiple: false });
-  if (selected) {
-    await setRootPath(selected);
+  if (typeof selected === "string") {
+    await openFolderPath(selected);
   }
 }
 
 async function openFile(): Promise<void> {
   const selected = await open({
     multiple: false,
-    filters: [{ name: "Markdown", extensions: ["md", "markdown", "mdx"] }],
+    filters: [{ name: "Markdown", extensions: MARKDOWN_EXTENSIONS }],
   });
   if (typeof selected === "string") {
     await openFileFromPath(selected);
+  }
+}
+
+function openRecent(entry: RecentEntry): void {
+  if (entry.kind === "file") {
+    void openFileFromPath(entry.path);
+  } else {
+    void openFolderPath(entry.path);
+  }
+}
+
+async function openDroppedPath(path: string): Promise<void> {
+  const status = await invoke<string>("path_status", { path }).catch(() => "error");
+  if (status === "dir") {
+    await openFolderPath(path);
+  } else if (status === "file" && isMarkdownName(path)) {
+    await openFileFromPath(path);
   }
 }
 
@@ -1638,115 +1937,450 @@ async function openFolderInNewWindow(): Promise<void> {
   }
 }
 
-// --- Filesystem ---
+// --- Navigation commands ---
 
-async function listEntries(dirPath: string): Promise<Entry[]> {
-  const entries = await readDir(dirPath);
-  return filterAndSortEntries(entries);
+function goHome(): void {
+  void nav.navigate({ kind: "home", rootPath, dir: [] });
 }
 
-// --- Sidebar ---
+function closeFolder(): void {
+  void nav.navigate({ kind: "home", rootPath: null, dir: [] });
+}
 
-async function renderSidebar(): Promise<void> {
-  const dirPath = getFullPath(rootPath!, currentPath);
-  const entries = await listEntries(dirPath);
-  fileList.innerHTML = "";
+/** ⌘↑: from a document to its folder, from a folder to its parent. */
+function goUp(): void {
+  if (rootPath === null) return;
+  const screen = activeScreen();
+  if (screen === "doc") {
+    void nav.navigate({ kind: "folder", rootPath, dir: [...currentPath] });
+  } else if (screen === "folder" && currentPath.length > 0) {
+    void nav.navigate({ kind: "folder", rootPath, dir: currentPath.slice(0, -1) });
+  }
+}
 
-  emptyState.style.display = "none";
-  markdownEl.style.display = activeFile ? "block" : "none";
-  if (!activeFile) {
-    emptyState.style.display = "block";
-    contentEl.classList.add("empty");
-    titlebarFilename.textContent = "";
-    syncWindowTitle();
+function handleNavCommand(step: string): void {
+  if (modalOpen()) return;
+  if (step === "back") void nav.back();
+  else if (step === "forward") void nav.forward();
+  else if (step === "home") goHome();
+  else if (step === "up") goUp();
+  else if (step === "close_folder") closeFolder();
+}
+
+/** Preferences, a theme dialog, a lightbox or a diagram is in front: leave the page alone. */
+function modalOpen(): boolean {
+  return Boolean(document.querySelector(".prefs-backdrop.visible, .image-overlay, .mermaid-overlay"));
+}
+
+function openEntry(entry: Entry): void {
+  if (rootPath === null) return;
+  const path = [...currentPath, entry.name];
+  if (entry.kind === "directory") {
+    void nav.navigate({ kind: "folder", rootPath, dir: path });
+  } else {
+    void nav.navigate(docEntry(rootPath, path.join("/")));
+  }
+}
+
+// --- Filesystem ---
+
+async function listDirectory(root: string, dir: string[]): Promise<Listing> {
+  try {
+    return summarizeListing(await readDir(getFullPath(root, dir)));
+  } catch (e) {
+    return { status: listingStatusFromError(e), rawCount: 0, entries: [] };
+  }
+}
+
+// One listing per folder visit, shared by the sidebar, the folder view and the
+// README lookup. Moving between documents of the same folder reuses it, so a
+// cloud-synced folder is not listed again on every click.
+let listingCache: { key: string; listing: Listing } | null = null;
+
+async function listForNavigation(root: string, dir: string[], fresh: boolean): Promise<Listing> {
+  const key = getFullPath(root, dir);
+  if (!fresh && listingCache?.key === key && listingCache.listing.status === "ok") {
+    return listingCache.listing;
+  }
+  const listing = await listDirectory(root, dir);
+  listingCache = { key, listing };
+  return listing;
+}
+
+async function pathStatus(path: string): Promise<string> {
+  try {
+    return await invoke<string>("path_status", { path });
+  } catch {
+    return "error";
+  }
+}
+
+// --- Navigator ---
+
+type Prepared =
+  | { kind: "home"; home: HomeData }
+  | { kind: "folder"; listing: Listing; readme: string | null }
+  | { kind: "same-doc" }
+  | {
+      kind: "doc";
+      html: string;
+      fullPath: string;
+      slow: boolean;
+      listing: Listing;
+      readme: string | null;
+    };
+
+type Built =
+  | { kind: "home"; node: HTMLElement }
+  | { kind: "folder"; node: HTMLElement; sidebar: HTMLElement; count: number }
+  | { kind: "same-doc" }
+  | { kind: "doc"; node: HTMLElement; sidebar: HTMLElement; count: number; title: string; slow: boolean };
+
+type Screen = "home" | "folder" | "doc";
+
+function activeScreen(): Screen {
+  return (document.body.dataset.screen as Screen) ?? "home";
+}
+
+let currentDocTitle = "";
+
+async function buildHomeData(keptRoot: string | null): Promise<HomeData> {
+  const [recents, lastRead] = await Promise.all([loadRecents(), loadLastRead()]);
+  let resume: HomeData["resume"] = null;
+  if (lastRead) {
+    const status = await pathStatus(`${lastRead.rootPath}/${lastRead.file}`);
+    resume = {
+      title: lastRead.title,
+      file: lastRead.file,
+      rootName: extractRootName(lastRead.rootPath),
+      status: status === "file" ? "ok" : status === "denied" || status === "error" ? "denied" : "missing",
+    };
+  }
+  let kept: HomeData["kept"] = null;
+  if (keptRoot) {
+    kept = { name: extractRootName(keptRoot), accessible: (await pathStatus(keptRoot)) === "dir" };
+  }
+  return { firstRun: recents.length === 0 && !lastRead, kept, resume, recents };
+}
+
+async function prepare(target: NavEntry): Promise<Prepared> {
+  if (target.kind === "home") {
+    return { kind: "home", home: await buildHomeData(target.rootPath) };
+  }
+  const root = target.rootPath!;
+  if (target.kind === "folder") {
+    const listing = await listForNavigation(root, target.dir, true);
+    return { kind: "folder", listing, readme: findReadme(listing.entries)?.name ?? null };
+  }
+  // Same document, another heading: no need to read or render it again.
+  if (activeScreen() === "doc" && root === rootPath && target.file === activeFile) {
+    return { kind: "same-doc" };
+  }
+  const fullPath = `${root}/${target.file}`;
+  showLoadingSoon();
+  try {
+    const [{ text, slow }, listing] = await Promise.all([
+      readDocumentText(fullPath, root),
+      listForNavigation(root, target.dir, false),
+    ]);
+    return {
+      kind: "doc",
+      html: parseMarkdown(text),
+      fullPath,
+      slow,
+      listing,
+      readme: findReadme(listing.entries)?.name ?? null,
+    };
+  } finally {
+    hideLoading();
+  }
+}
+
+function build(p: Prepared, ctx: CommitContext): Built {
+  const target = ctx.target;
+  if (p.kind === "home") {
+    homeDataKey = JSON.stringify(p.home);
+    return {
+      kind: "home",
+      node: buildHome(p.home, {
+        resume: () => void resumeReading(),
+        openFolder: () => void openFolder(),
+        openFile: () => void openFile(),
+        openExamples: () => void openExamples(),
+        openRecent,
+        clearRecents: () => void clearRecents(),
+        returnToFolder: () => {
+          if (target.rootPath) void nav.navigate(returnTarget(nav.state(), target.rootPath));
+        },
+        closeFolder,
+        openResumeFolder: () => void openResumeFolder(),
+      }),
+    };
+  }
+  if (p.kind === "same-doc") return { kind: "same-doc" };
+
+  const root = target.rootPath!;
+  const name = extractRootName(root);
+  const entryActions = {
+    open: (entry: Entry) => {
+      const path = [...target.dir, entry.name];
+      if (entry.kind === "directory") void nav.navigate({ kind: "folder", rootPath: root, dir: path });
+      else void nav.navigate(docEntry(root, path.join("/")));
+    },
+    up: () => void nav.navigate({ kind: "folder", rootPath: root, dir: target.dir.slice(0, -1) }),
+  };
+  const fileCount = (listing: Listing) => listing.entries.filter((e) => e.kind === "file").length;
+
+  if (p.kind === "folder") {
+    const readmePath = p.readme ? [...target.dir, p.readme].join("/") : null;
+    return {
+      kind: "folder",
+      node: buildFolderView(
+        { rootName: name, dir: target.dir, listing: p.listing, readme: p.readme },
+        {
+          open: entryActions.open,
+          openReadme: () => {
+            if (readmePath) void nav.navigate(docEntry(root, readmePath));
+          },
+          openOther: () => void openFolder(),
+        }
+      ),
+      sidebar: buildFileList(p.listing, target.dir.length > 0, null, p.readme, entryActions),
+      count: fileCount(p.listing),
+    };
+  }
+
+  const container = document.createElement("div");
+  container.innerHTML = p.html;
+  resolveImagePaths(container, p.fullPath);
+  addCopyButtons(container);
+  addImageLightbox(container, openImageOverlay);
+  interceptLinks(container, root, target.dir);
+  const fileName = target.file!.split("/").pop()!;
+  const title = container.querySelector("h1")?.textContent?.trim() || fileName;
+  return {
+    kind: "doc",
+    node: container,
+    sidebar: buildFileList(p.listing, target.dir.length > 0, fileName, p.readme, entryActions),
+    count: fileCount(p.listing),
+    title,
+    slow: p.slow,
+  };
+}
+
+function publish(b: Built, ctx: CommitContext): void {
+  try {
+    publishView(b, ctx);
+  } catch (e) {
+    // The swap must not leave the window half-updated; report and keep going.
+    console.error("Failed to publish the view:", e);
+  }
+  syncNavButtons();
+}
+
+function publishView(b: Built, ctx: CommitContext): void {
+  const target = ctx.target;
+  closeTransientUI();
+  loadError.hidden = true;
+  if (b.kind === "same-doc") return;
+
+  rootPath = target.rootPath;
+  rootName = rootPath ? extractRootName(rootPath) : "";
+  currentPath = [...target.dir];
+  activeFile = target.kind === "doc" ? target.file! : null;
+  document.body.dataset.screen = target.kind;
+  document.body.classList.toggle("has-folder", rootPath !== null);
+
+  homeEl.hidden = b.kind !== "home";
+  folderViewEl.hidden = b.kind !== "folder";
+  docCard.hidden = b.kind !== "doc";
+
+  if (b.kind === "home") {
+    homeEl.replaceChildren(b.node);
+    homeEl.scrollTop = 0;
+  } else {
+    folderSwitcherName.textContent = rootName;
+    folderSwitcherPath.textContent = rootPath ? parentLabel(rootPath) : "";
+    folderSwitcher.title = rootPath ?? "";
+    sidebarCount.textContent = String(b.count);
+    fileList.replaceChildren(b.sidebar);
+  }
+
+  if (b.kind === "folder") {
+    folderViewEl.replaceChildren(b.node);
+  }
+
+  if (b.kind === "doc") {
+    currentDocTitle = b.title;
+    markdownEl.replaceChildren(...Array.from(b.node.childNodes));
+    slowReadNotice.hidden = !(b.slow && !slowReadDismissed);
+    buildOutline();
+    // The search index points into the content just replaced: drop it until
+    // the decorations (Mermaid) are done, then rebuild it.
+    searchController?.suspend();
+    setSearchEnabled(false);
+  } else {
+    currentDocTitle = "";
+    markdownEl.replaceChildren();
+    if (scrollObserver) scrollObserver.disconnect();
     setSearchEnabled(false);
   }
 
-  if (currentPath.length > 0) {
-    const back = document.createElement("div");
-    back.className = "file-item";
-    const backIcon = document.createElement("span");
-    backIcon.className = "icon";
-    backIcon.textContent = "..";
-    const backName = document.createElement("span");
-    backName.className = "name";
-    backName.textContent = t("sidebar.parent");
-    back.append(backIcon, backName);
-    back.addEventListener("click", () => {
-      currentPath.pop();
-      renderSidebar();
-    });
-    fileList.appendChild(back);
-  }
-
-  for (const entry of entries) {
-    const item = document.createElement("div");
-    item.className = "file-item";
-    const icon = entry.kind === "directory" ? "\u{1F4C1}" : "\u{1F4C4}";
-    item.innerHTML = `<span class="icon">${icon}</span><span class="name">${entry.name}</span>`;
-
-    if (entry.kind === "directory") {
-      item.addEventListener("click", () => {
-        currentPath.push(entry.name);
-        renderSidebar();
-      });
-    } else {
-      const filePath = [...currentPath, entry.name].join("/");
-      if (filePath === activeFile) item.classList.add("active");
-      item.addEventListener("click", () => loadFile(filePath));
-    }
-    fileList.appendChild(item);
-  }
-  renderBreadcrumb();
+  breadcrumb.replaceChildren(
+    rootPath && b.kind !== "home"
+      ? buildBreadcrumb(rootName, currentPath, activeFile ? activeFile.split("/").pop()! : null, b.kind === "folder", (depth) => {
+          void nav.navigate({ kind: "folder", rootPath: rootPath!, dir: currentPath.slice(0, depth) });
+        })
+      : document.createDocumentFragment()
+  );
+  const docShown = b.kind === "doc";
+  printBtn.disabled = !docShown;
+  pdfBtn.disabled = !docShown;
+  syncWindowTitle();
 }
 
-function renderBreadcrumb(): void {
-  breadcrumb.innerHTML = "";
-
-  const changeBtn = document.createElement("span");
-  changeBtn.textContent = "\u21C4";
-  changeBtn.title = t("breadcrumb.change");
-  changeBtn.style.cssText =
-    "cursor:pointer;font-size:14px;margin-right:4px;opacity:0.6;";
-  changeBtn.addEventListener("click", openFolder);
-  breadcrumb.appendChild(changeBtn);
-
-  const root = document.createElement("span");
-  root.textContent = rootName;
-  if (currentPath.length > 0) {
-    root.addEventListener("click", () => {
-      currentPath = [];
-      renderSidebar();
-    });
-  } else {
-    root.classList.add("current");
-  }
-  breadcrumb.appendChild(root);
-
-  currentPath.forEach((part, i) => {
-    breadcrumb.appendChild(document.createTextNode(" / "));
-    const span = document.createElement("span");
-    span.textContent = part;
-    if (i < currentPath.length - 1) {
-      span.addEventListener("click", () => {
-        currentPath = currentPath.slice(0, i + 1);
-        renderSidebar();
+async function decorate(ctx: DecorationContext): Promise<void> {
+  const screen = ctx.target.kind;
+  if (screen === "doc") {
+    await renderMermaidDiagrams(ctx.isCurrent);
+    if (!ctx.isCurrent()) return;
+    applyPositioning(contentEl, ctx.positioning);
+    setSearchEnabled(true);
+    searchController?.reset({ scroll: !ctx.traversal && ctx.positioning.mode === "top" });
+    if (rootPath && activeFile) {
+      void writeLastRead({
+        rootPath,
+        file: activeFile,
+        title: currentDocTitle,
+        scrollTop: contentEl.scrollTop,
+        at: Date.now(),
       });
-    } else {
-      span.classList.add("current");
     }
-    breadcrumb.appendChild(span);
+    return;
+  }
+  const scroller = screen === "home" ? homeEl : folderViewEl;
+  applyPositioning(scroller, ctx.positioning);
+}
+
+// Scrolls done by the app (restoring a position, jumping to a heading) must not
+// count as reading activity; only the reader's own scrolling updates "lastRead".
+let programmaticScroll = false;
+let programmaticTimer: ReturnType<typeof setTimeout> | null = null;
+
+function applyPositioning(scroller: HTMLElement, positioning: Positioning): void {
+  programmaticScroll = true;
+  if (programmaticTimer !== null) clearTimeout(programmaticTimer);
+  // scrollend ends the window when supported; the timer is the fallback.
+  programmaticTimer = setTimeout(() => {
+    programmaticScroll = false;
+  }, 400);
+  if (positioning.mode === "anchor") {
+    const target = markdownEl.querySelector(`#${CSS.escape(positioning.anchor)}`);
+    if (target) {
+      target.scrollIntoView({ block: "start" });
+      return;
+    }
+    scroller.scrollTop = 0;
+  } else if (positioning.mode === "restore") {
+    scroller.scrollTop = positioning.scrollTop;
+  } else {
+    scroller.scrollTop = 0;
+  }
+}
+
+contentEl.addEventListener("scrollend", () => {
+  programmaticScroll = false;
+});
+
+contentEl.addEventListener("scroll", () => {
+  if (programmaticScroll || activeScreen() !== "doc" || !rootPath || !activeFile) return;
+  scheduleLastRead({
+    rootPath,
+    file: activeFile,
+    title: currentDocTitle,
+    scrollTop: contentEl.scrollTop,
+    at: Date.now(),
+  });
+});
+
+function captureScroll(): number {
+  const screen = activeScreen();
+  if (screen === "doc") return contentEl.scrollTop;
+  if (screen === "folder") return folderViewEl.scrollTop;
+  return homeEl.scrollTop;
+}
+
+function onNavigationError(error: unknown, target: NavEntry): void {
+  console.error("Failed to open:", target, error);
+  // Surface the failure. A console-only error made a whole class of unopenable
+  // files look like an unresponsive click: the sidebar listed them, selecting
+  // one simply did nothing.
+  const name = target.file?.split("/").pop() ?? target.rootPath ?? "";
+  loadErrorText.textContent = t("loadError.message").replace("{file}", name);
+  loadError.hidden = false;
+  if (activeScreen() !== "doc") {
+    // The banner lives in the document card; on other screens show it on top.
+    document.body.classList.add("show-load-error");
+    setTimeout(() => document.body.classList.remove("show-load-error"), 5000);
+  }
+}
+
+const nav: WindowNavigator = createNavigator<Prepared, Built>({
+  prepare,
+  build,
+  publish,
+  captureScroll,
+  decorate,
+  onError: onNavigationError,
+});
+
+function syncNavButtons(): void {
+  const state = nav.state();
+  navBackBtn.disabled = !state.canBack;
+  navForwardBtn.disabled = !state.canForward;
+  const home = state.current?.kind === "home";
+  navHomeBtn.classList.toggle("is-current", home);
+  if (home) navHomeBtn.setAttribute("aria-current", "page");
+  else navHomeBtn.removeAttribute("aria-current");
+}
+
+// Data the home screen on display was built from: refreshing only when it
+// changed keeps a click that activates the window from landing on a node that
+// is being replaced.
+let homeDataKey = "";
+
+async function refreshHome(): Promise<void> {
+  const current = nav.state().current;
+  if (current?.kind !== "home") return;
+  const data = await buildHomeData(current.rootPath);
+  const key = JSON.stringify(data);
+  if (key === homeDataKey) return;
+  homeDataKey = key;
+  if (nav.state().current !== null && activeScreen() === "home") {
+    const ctx: CommitContext = { target: current, positioning: { mode: "top" }, traversal: false, viewGen: 0 };
+    const built = build({ kind: "home", home: data }, ctx);
+    if (built.kind === "home") homeEl.replaceChildren(built.node);
+  }
+}
+
+async function resumeReading(): Promise<void> {
+  const lastRead = await loadLastRead();
+  if (!lastRead) return;
+  await nav.navigate(docEntry(lastRead.rootPath, lastRead.file), {
+    restoreScrollTop: lastRead.scrollTop,
   });
 }
 
-// --- File loading ---
-
-async function autoSelectReadme(): Promise<void> {
-  const dirPath = getFullPath(rootPath!, currentPath);
-  const entries = await listEntries(dirPath);
-  const readme = findReadme(entries);
-  if (readme) await loadFile([...currentPath, readme.name].join("/"));
+async function openResumeFolder(): Promise<void> {
+  const lastRead = await loadLastRead();
+  if (lastRead) await openFolderPath(lastRead.rootPath);
 }
+
+function parentLabel(path: string): string {
+  return path.replace(/^\/Users\/[^/]+/, "~");
+}
+
+// --- File loading ---
 
 function isRelativePath(src: string): boolean {
   return !(
@@ -1779,6 +2413,7 @@ let loadingTimer: ReturnType<typeof setTimeout> | null = null;
 
 function showLoadingSoon(): void {
   // Small delay so instant (cached) reads never flash a spinner.
+  if (loadingTimer !== null) clearTimeout(loadingTimer);
   loadingTimer = setTimeout(() => {
     contentLoading.hidden = false;
   }, 150);
@@ -1797,8 +2432,11 @@ slowReadDismiss.addEventListener("click", () => {
   slowReadDismissed = true;
 });
 
+// `root` is captured by the navigation that asked for this read, so a slow read
+// started for one folder can never be resolved against another.
 async function readDocumentText(
-  fullPath: string
+  fullPath: string,
+  root: string
 ): Promise<{ text: string; slow: boolean }> {
   let mtime: number | null = null;
   try {
@@ -1815,7 +2453,7 @@ async function readDocumentText(
   // refuses anything outside it.
   const text = await invoke<string>("read_document", {
     path: fullPath,
-    root: rootPath,
+    root,
   });
   const slow = performance.now() - start >= SLOW_READ_MS;
   if (mtime !== null) {
@@ -1824,118 +2462,34 @@ async function readDocumentText(
   return { text, slow };
 }
 
-async function loadFile(filePath: string): Promise<void> {
-  try {
-    const fullPath = `${rootPath}/${filePath}`;
-    // IPC round-trip probe — only when the debug HUD is open, so normal use
-    // doesn't pay for an extra invoke on every document open.
-    const tPing0 = performance.now();
-    if (debugOverlay.isVisible()) {
-      await invoke("ping");
-    }
-    const tPing1 = performance.now();
-
-    loadError.hidden = true;
-    showLoadingSoon();
-    const tRead0 = performance.now();
-    let text: string;
-    let slowRead: boolean;
-    try {
-      ({ text, slow: slowRead } = await readDocumentText(fullPath));
-    } finally {
-      hideLoading();
-    }
-    const tRead1 = performance.now();
-
-    slowReadNotice.hidden = !(slowRead && !slowReadDismissed);
-
-    activeFile = filePath;
-    emptyState.style.display = "none";
-    markdownEl.style.display = "block";
-    contentEl.classList.remove("empty");
-
-    const t0 = performance.now();
-    markdownEl.innerHTML = parseMarkdown(text);
-    const t1 = performance.now();
-    resolveImagePaths(markdownEl, fullPath);
-    contentEl.scrollTop = 0;
-    const t2 = performance.now();
-
-    await renderMermaidDiagrams();
-    const t3 = performance.now();
-    addCopyButtons(markdownEl);
-    addImageLightbox(markdownEl, openImageOverlay);
-    const t4 = performance.now();
-
-    const fileDir = filePath.split("/").slice(0, -1);
-    if (fileDir.join("/") !== currentPath.join("/")) {
-      currentPath = fileDir;
-      await renderSidebar();
-    }
-
-    const currentDir = filePath.split("/").slice(0, -1);
-    interceptLinks(currentDir);
-    highlightSidebar();
-    const t5 = performance.now();
-    buildOutline();
-    const t6 = performance.now();
-
-    titlebarFilename.textContent = filePath.split("/").pop() ?? "";
-    syncWindowTitle();
-    setSearchEnabled(true);
-    searchController?.reset();
-
-    debugOverlay.recordOpen({
-      file: filePath.split("/").pop() ?? filePath,
-      total: t6 - tPing0,
-      phases: {
-        ping: tPing1 - tPing0,
-        read: tRead1 - tRead0,
-        parse: t1 - t0,
-        images: t2 - t1,
-        mermaid: t3 - t2,
-        dom: t4 - t3,
-        outline: t6 - t5,
-      },
-    });
-  } catch (e) {
-    console.error("Failed to load file:", filePath, e);
-    // Surface the failure. A console-only error made a whole class of unopenable
-    // files look like an unresponsive click: the sidebar listed them, selecting
-    // one simply did nothing.
-    hideLoading();
-    loadErrorText.textContent = t("loadError.message").replace(
-      "{file}",
-      filePath.split("/").pop() ?? filePath
-    );
-    loadError.hidden = false;
-  }
-}
-
 // --- Right outline ---
 
 function buildOutline(): void {
   if (scrollObserver) scrollObserver.disconnect();
 
   const headings = markdownEl.querySelectorAll("h2, h3");
-  outlineNav.innerHTML = "";
+  outlineNav.replaceChildren();
 
   if (headings.length === 0) {
     outlineEl.style.display = "none";
+    document.body.classList.remove("has-outline");
     return;
   }
 
-  outlineEl.style.display = "block";
-  const items: { el: HTMLAnchorElement; heading: Element }[] = [];
+  outlineEl.style.display = "";
+  document.body.classList.add("has-outline");
+  const items: { el: HTMLButtonElement; heading: Element }[] = [];
 
   for (const h of headings) {
-    const item = document.createElement("a");
+    const item = document.createElement("button");
+    item.type = "button";
     item.className = "outline-item";
     if (h.tagName === "H3") item.classList.add("depth-3");
     item.textContent = h.textContent;
     item.dataset.targetId = h.id;
     item.addEventListener("click", () => {
       h.scrollIntoView({ behavior: "smooth" });
+      document.body.classList.remove("outline-open");
     });
     outlineNav.appendChild(item);
     items.push({ el: item, heading: h });
@@ -1947,7 +2501,10 @@ function buildOutline(): void {
         if (entry.isIntersecting) {
           const id = entry.target.id;
           for (const i of items) {
-            i.el.classList.toggle("active", i.heading.id === id);
+            const active = i.heading.id === id;
+            i.el.classList.toggle("active", active);
+            if (active) i.el.setAttribute("aria-current", "location");
+            else i.el.removeAttribute("aria-current");
           }
         }
       }
@@ -1966,8 +2523,9 @@ function buildOutline(): void {
 
 // --- Link interception ---
 
-function interceptLinks(currentDir: string[]): void {
-  for (const a of markdownEl.querySelectorAll("a")) {
+function interceptLinks(container: HTMLElement, root: string, currentDir: string[]): void {
+  const file = () => activeFile;
+  for (const a of container.querySelectorAll("a")) {
     const href = a.getAttribute("href");
     if (!href) continue;
 
@@ -1985,9 +2543,9 @@ function interceptLinks(currentDir: string[]): void {
     if (linkType === "anchor") {
       a.addEventListener("click", (e) => {
         e.preventDefault();
-        const id = href.slice(1);
-        const target = markdownEl.querySelector(`#${CSS.escape(id)}`);
-        if (target) target.scrollIntoView({ behavior: "smooth" });
+        const anchor = decodeAnchor(href.slice(1));
+        const current = file();
+        if (anchor && current) void nav.navigate(docEntry(root, current, anchor));
       });
       continue;
     }
@@ -1997,29 +2555,8 @@ function interceptLinks(currentDir: string[]): void {
         e.preventDefault();
         const { filePart, anchor } = parseMarkdownHref(href);
         const resolved = resolvePath([...currentDir], filePart);
-        loadFile(resolved).then(() => {
-          if (anchor) {
-            const target = markdownEl.querySelector(`#${CSS.escape(anchor)}`);
-            if (target) target.scrollIntoView({ behavior: "smooth" });
-          }
-        });
+        void nav.navigate(docEntry(root, resolved, anchor));
       });
-    }
-  }
-}
-
-function highlightSidebar(): void {
-  for (const item of fileList.querySelectorAll(".file-item")) {
-    item.classList.remove("active");
-  }
-  if (!activeFile) return;
-  const activeName = activeFile.split("/").pop();
-  const activeDir = activeFile.split("/").slice(0, -1).join("/");
-  if (activeDir === currentPath.join("/")) {
-    for (const item of fileList.querySelectorAll(".file-item")) {
-      if (item.querySelector(".name")?.textContent === activeName) {
-        item.classList.add("active");
-      }
     }
   }
 }
