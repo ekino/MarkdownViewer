@@ -88,12 +88,17 @@ export function summarizeListing(
 /** Map a failed directory read to what the folder view tells the reader. */
 export function listingStatusFromError(error: unknown): ListingStatus {
   const text = String(error).toLowerCase();
-  if (text.includes("no such file") || text.includes("not found") || text.includes("os error 2")) {
-    return "missing";
+  // Prefer the errno when present: "os error 20" (not a directory) must not
+  // read as "os error 2" (no such file).
+  const errno = /os error (\d+)/.exec(text);
+  if (errno) {
+    const code = Number(errno[1]);
+    if (code === 2) return "missing";
+    if (code === 1 || code === 13) return "denied";
+    return "error";
   }
-  if (text.includes("permission") || text.includes("denied") || text.includes("os error 1") || text.includes("os error 13")) {
-    return "denied";
-  }
+  if (text.includes("no such file") || text.includes("not found")) return "missing";
+  if (text.includes("permission") || text.includes("denied")) return "denied";
   return "error";
 }
 

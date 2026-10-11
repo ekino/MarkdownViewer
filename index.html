@@ -253,6 +253,26 @@
       display: none;
     }
 
+    #content:focus {
+      outline: none;
+    }
+
+    .nav-spinner {
+      width: 18px;
+      height: 18px;
+      margin: 6px 0 0 4px;
+      border: 2.5px solid var(--ui-key-line);
+      border-right-color: transparent;
+      border-radius: 50%;
+      animation: nav-spin 0.8s linear infinite;
+    }
+
+    @keyframes nav-spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
     /* Document tools only make sense on a document. */
     body:not([data-screen="doc"]) #search-box,
     body:not([data-screen="doc"]) #pdf-btn,
@@ -315,6 +335,11 @@
       border-radius: 9px;
       padding: 0 4px 0 9px;
       margin-right: 4px;
+    }
+
+    #search-box:focus-within {
+      outline: 3px solid var(--ui-focus);
+      outline-offset: 2px;
     }
 
     #search-box .search-icon {
@@ -1864,16 +1889,18 @@
     }
 
     /* --- Narrower windows --- */
+    /* Narrow: the outline folds into a button — unless the preference says
+       "always" (it stays docked) or "hidden" (no outline, no button). */
     @media (max-width: 1100px) {
-      body.has-outline[data-screen="doc"] #outline-toggle {
+      html:not([data-outline="always"]):not([data-outline="hidden"]) body.has-outline[data-screen="doc"] #outline-toggle {
         display: inline-flex;
       }
 
-      body.has-outline #outline {
+      html:not([data-outline="always"]) body.has-outline #outline {
         display: none;
       }
 
-      body.has-outline.outline-open #outline {
+      html:not([data-outline="always"]):not([data-outline="hidden"]) body.has-outline.outline-open #outline {
         display: block;
         position: absolute;
         top: 10px;
@@ -1970,6 +1997,10 @@
       #sidebar,
       .tile {
         transition: none;
+      }
+
+      .nav-spinner {
+        animation-duration: 2.4s;
       }
 
       .tile:hover,
@@ -2868,6 +2899,7 @@
           <svg class="icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/></svg>
           <span data-i18n="nav.home">Accueil</span>
         </button>
+        <span id="nav-spinner" class="nav-spinner" hidden role="status" data-i18n-aria-label="loading"></span>
       </div>
       <nav id="breadcrumb" data-i18n-aria-label="breadcrumb.label"></nav>
       <div id="titlebar-spacer" data-tauri-drag-region></div>
@@ -2974,7 +3006,7 @@
       <section id="folder-view" hidden></section>
 
       <div id="doc-card" hidden>
-        <div id="content">
+        <div id="content" tabindex="-1">
           <div id="load-error" hidden role="alert">
             <span class="srn-text" id="load-error-text"></span>
           </div>

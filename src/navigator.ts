@@ -45,8 +45,11 @@ export interface DecorationContext extends CommitContext {
 }
 
 export interface NavigatorDeps<P, B> {
-  /** Async and fallible; must not touch the page. `stale()` turns true once superseded. */
-  prepare(target: NavEntry, stale: () => boolean): Promise<P>;
+  /**
+   * Async and fallible; must not touch the page. `stale()` turns true once
+   * superseded. `reload` asks to read the entry on screen again (it changed on disk).
+   */
+  prepare(target: NavEntry, stale: () => boolean, options: { reload: boolean }): Promise<P>;
   /** Builds the view off-page. May throw: nothing visible has changed yet. */
   build(prepared: P, ctx: CommitContext): B;
   /** Swaps the built view in. Synchronous and must not throw. */
@@ -116,10 +119,14 @@ export function resolvePositioning(
 type Request =
   | { kind: "push"; target: NavEntry; restoreScrollTop?: number }
   | { kind: "traverse"; index: number }
+  | { kind: "reload"; index: number }
   | { kind: "initial"; target: NavEntry };
 
 export interface Navigator {
+  /** Go to `target`; asking for the entry already on screen reads it again. */
   navigate(target: NavEntry, options?: NavigateOptions): Promise<boolean>;
+  /** Read the entry on screen again, keeping the history and the reading position. */
+  reload(): Promise<boolean>;
   back(): Promise<boolean>;
   forward(): Promise<boolean>;
   /**
@@ -162,12 +169,13 @@ export function createNavigator<P, B>(deps: NavigatorDeps<P, B>): Navigator {
   }
 
   function targetOf(request: Request): NavEntry {
-    return request.kind === "traverse"
+    return request.kind === "traverse" || request.kind === "reload"
       ? copyEntry(entries[request.index])
       : copyEntry(request.target);
   }
 
   function applyHistory(request: Request, target: NavEntry, leftScroll: number): void {
+    if (request.kind === "reload") return;
     if (index >= 0) entries[index].scrollTop = leftScroll;
     if (request.kind === "traverse") {
       index = request.index;
@@ -192,48 +200,58 @@ export function createNavigator<P, B>(deps: NavigatorDeps<P, B>): Navigator {
   async function run(request: Request, gen: number): Promise<boolean> {
     const stale = () => gen !== requestGen;
     const target = targetOf(request);
+    // The navigation counts as in flight (and a pending Back keeps its target)
+    // until it commits or is dropped — waiting for an export included.
     inFlight += 1;
-    let prepared: P;
     try {
-      prepared = await deps.prepare(copyEntry(target), stale);
-    } catch (error) {
-      if (!stale()) deps.onError(error, target);
-      return false;
+      let prepared: P;
+      try {
+        prepared = await deps.prepare(copyEntry(target), stale, { reload: request.kind === "reload" });
+      } catch (error) {
+        if (!stale()) deps.onError(error, target);
+        return false;
+      }
+
+      // An export captures the page: commits wait until no export runs, even one
+      // started while this navigation was already waiting, then re-check freshness.
+      let lock = exclusive;
+      await lock;
+      while (lock !== exclusive) {
+        lock = exclusive;
+        await lock;
+      }
+      if (stale()) return false;
+
+      const traversal = request.kind === "traverse";
+      // A reload keeps the reader where they are.
+      const positioning: Positioning =
+        request.kind === "reload"
+          ? { mode: "restore", scrollTop: deps.captureScroll() }
+          : resolvePositioning(target, traversal, request.kind === "push" ? request.restoreScrollTop : undefined);
+      const ctx: CommitContext = { target, positioning, traversal, viewGen: gen };
+
+      let built: B;
+      try {
+        built = deps.build(prepared, ctx);
+      } catch (error) {
+        deps.onError(error, target);
+        return false;
+      }
+
+      const leftScroll = index >= 0 ? deps.captureScroll() : 0;
+      applyHistory(request, target, leftScroll);
+      viewGen = gen;
+      deps.publish(built, ctx);
+
+      const decoration: DecorationContext = { ...ctx, isCurrent: () => viewGen === gen };
+      decorations = deps.decorate(decoration).catch((error) => {
+        console.warn("Decoration failed:", error);
+      });
+      return true;
     } finally {
       inFlight -= 1;
       if (pendingTraverse && pendingTraverse.gen === gen) pendingTraverse = null;
     }
-
-    // An export captures the page: commits wait for it, then re-check freshness.
-    await exclusive;
-    if (stale()) return false;
-
-    const traversal = request.kind === "traverse";
-    const positioning = resolvePositioning(
-      target,
-      traversal,
-      request.kind === "push" ? request.restoreScrollTop : undefined
-    );
-    const ctx: CommitContext = { target, positioning, traversal, viewGen: gen };
-
-    let built: B;
-    try {
-      built = deps.build(prepared, ctx);
-    } catch (error) {
-      deps.onError(error, target);
-      return false;
-    }
-
-    const leftScroll = index >= 0 ? deps.captureScroll() : 0;
-    applyHistory(request, target, leftScroll);
-    viewGen = gen;
-    deps.publish(built, ctx);
-
-    const decoration: DecorationContext = { ...ctx, isCurrent: () => viewGen === gen };
-    decorations = deps.decorate(decoration).catch((error) => {
-      console.warn("Decoration failed:", error);
-    });
-    return true;
   }
 
   function request(r: Request): Promise<boolean> {
@@ -255,14 +273,15 @@ export function createNavigator<P, B>(deps: NavigatorDeps<P, B>): Navigator {
     navigate(target, options = {}) {
       const current = index >= 0 ? entries[index] : null;
       if (current && sameTarget(current, target) && options.restoreScrollTop === undefined) {
-        // Asking for what is already on screen cancels whatever was still loading.
-        if (inFlight > 0) {
-          requestGen += 1;
-          pendingTraverse = null;
-        }
-        return Promise.resolve(false);
+        // Asking for what is already on screen reads it again (it may have
+        // changed on disk) and cancels whatever was still loading.
+        return request({ kind: "reload", index });
       }
       return request({ kind: "push", target: copyEntry(target), restoreScrollTop: options.restoreScrollTop });
+    },
+    reload() {
+      if (index < 0) return Promise.resolve(false);
+      return request({ kind: "reload", index });
     },
     back: () => traverse(-1),
     forward: () => traverse(1),

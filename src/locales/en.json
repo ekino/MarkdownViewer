@@ -156,5 +156,6 @@
   "prefs.launch.home": "Home",
   "prefs.launch.lastFolder": "Last folder",
   "mermaid.fullscreen": "Fullscreen",
-  "mermaid.diagram": "Diagram"
+  "mermaid.diagram": "Diagram",
+  "loading": "Loading…"
 }

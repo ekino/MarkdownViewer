@@ -156,5 +156,6 @@
   "prefs.launch.home": "Accueil",
   "prefs.launch.lastFolder": "Dernier dossier",
   "mermaid.fullscreen": "Plein écran",
-  "mermaid.diagram": "Diagramme"
+  "mermaid.diagram": "Diagramme",
+  "loading": "Chargement…"
 }

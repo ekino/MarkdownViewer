@@ -855,8 +855,9 @@ pub fn run(path_arg: Option<String>) {
             let nav_home = MenuItemBuilder::with_id("nav_home", "Home")
                 .accelerator("CmdOrCtrl+Shift+H")
                 .build(app)?;
-            let nav_up = MenuItemBuilder::with_id("nav_up", "Enclosing Folder")
-                .accelerator("CmdOrCtrl+Up")
+            // No native accelerator for ⌘↑: it would also swallow the key in
+            // text fields. The frontend handles it outside editable fields.
+            let nav_up = MenuItemBuilder::with_id("nav_up", "Enclosing Folder (⌘↑)")
                 .build(app)?;
             let nav_close = MenuItemBuilder::with_id("nav_close_folder", "Close Folder")
                 .accelerator("CmdOrCtrl+Shift+W")

@@ -142,11 +142,29 @@ describe("createNavigator", () => {
     expect(h.nav.state().canForward).toBe(false);
   });
 
-  it("does not push the entry already on screen", async () => {
+  it("reads the entry on screen again instead of pushing it twice", async () => {
     const h = harness();
     await start(h, doc("a.md"));
-    expect(await h.nav.navigate(doc("a.md"))).toBe(false);
+    h.setScroll(700);
+    const again = h.nav.navigate(doc("a.md"));
+    await h.finish(doc("a.md"), "doc:a.md v2");
+    expect(await again).toBe(true);
     expect(h.nav.state().entries).toHaveLength(1);
+    expect(last(h.shown)).toBe("doc:a.md v2");
+    expect(last(h.published).positioning).toEqual({ mode: "restore", scrollTop: 700 });
+  });
+
+  it("reload keeps the history as it is", async () => {
+    const h = harness();
+    await start(h);
+    const a = h.nav.navigate(doc("a.md"));
+    await h.finish(doc("a.md"));
+    await a;
+    const r = h.nav.reload();
+    await h.finish(doc("a.md"));
+    expect(await r).toBe(true);
+    expect(h.nav.state().entries.map((e) => e.file ?? e.kind)).toEqual(["home", "a.md"]);
+    expect(h.nav.state().index).toBe(1);
   });
 
   it("caps the history", async () => {
@@ -344,6 +362,47 @@ describe("createNavigator", () => {
     expect(h.shown).toEqual(["doc:a.md", "doc:c.md"]);
   });
 
+  it("a navigation waiting for one export also waits for an export started meanwhile", async () => {
+    const h = harness();
+    await start(h, doc("a.md"));
+    const first = deferred<void>();
+    const second = deferred<void>();
+    const e1 = h.nav.runExclusive(() => first.promise);
+    const b = h.nav.navigate(doc("b.md"));
+    await h.finish(doc("b.md"));
+    const e2 = h.nav.runExclusive(() => second.promise);
+    first.resolve();
+    await e1;
+    await flush();
+    expect(h.shown).toEqual(["doc:a.md"]);
+    second.resolve();
+    await e2;
+    expect(await b).toBe(true);
+    expect(last(h.shown)).toBe("doc:b.md");
+  });
+
+  it("a Back waiting for an export still counts for the next Back", async () => {
+    const h = harness();
+    await start(h);
+    for (const f of ["a.md", "b.md", "c.md"]) {
+      const p = h.nav.navigate(doc(f));
+      await h.finish(doc(f));
+      await p;
+    }
+    const gate = deferred<void>();
+    const exporting = h.nav.runExclusive(() => gate.promise);
+    const first = h.nav.back();
+    await h.finish(doc("b.md"));
+    expect(h.nav.pending()).toBe(1);
+    const second = h.nav.back();
+    await h.finish(doc("a.md"));
+    gate.resolve();
+    await exporting;
+    expect(await first).toBe(false);
+    expect(await second).toBe(true);
+    expect(h.nav.state().current?.file).toBe("a.md");
+  });
+
   it("decorationsDone follows the current view's decorations", async () => {
     const h = harness();
     const gate = deferred<void>();
@@ -370,9 +429,11 @@ describe("createNavigator", () => {
     const h = harness();
     await start(h, doc("a.md"));
     const b = h.nav.navigate(doc("b.md"));
-    await h.nav.navigate(doc("a.md"));
+    const again = h.nav.navigate(doc("a.md"));
     await h.finish(doc("b.md"));
+    await h.finish(doc("a.md"));
     expect(await b).toBe(false);
+    expect(await again).toBe(true);
     expect(h.nav.state().current?.file).toBe("a.md");
   });
 

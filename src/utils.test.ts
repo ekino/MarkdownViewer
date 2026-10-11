@@ -398,6 +398,7 @@ describe("summarizeListing", () => {
     expect(listingStatusFromError("Permission denied (os error 13)")).toBe("denied");
     expect(listingStatusFromError("Operation not permitted (os error 1)")).toBe("denied");
     expect(listingStatusFromError("disk on fire")).toBe("error");
+    expect(listingStatusFromError("Not a directory (os error 20)")).toBe("error");
   });
 });
 

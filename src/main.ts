@@ -354,6 +354,7 @@ async function renderMermaidDiagrams(isCurrent: () => boolean = () => true): Pro
       srcPre.appendChild(srcCode);
       errWrapper.appendChild(errMsg);
       errWrapper.appendChild(srcPre);
+      addCopyButtons(errWrapper);
       pre.replaceWith(errWrapper);
       document.getElementById(id)?.remove();
     }
@@ -473,6 +474,8 @@ const sidebarToggle = document.getElementById("sidebar-toggle") as HTMLButtonEle
 const sidebarClose = document.getElementById("sidebar-close") as HTMLButtonElement;
 const outlineToggle = document.getElementById("outline-toggle") as HTMLButtonElement;
 const searchToggle = document.getElementById("search-toggle") as HTMLButtonElement;
+const searchBoxEl = document.getElementById("search-box") as HTMLDivElement;
+const navSpinner = document.getElementById("nav-spinner") as HTMLSpanElement;
 const prefsBtn = document.getElementById("prefs-btn") as HTMLButtonElement;
 const contentEl = document.getElementById("content") as HTMLDivElement;
 const contentLoading = document.getElementById(
@@ -659,13 +662,11 @@ const debugOverlay = createDebugOverlay();
 
 let searchController: SearchController | null = null;
 
+// Disabling keeps the query: it runs again on the next document, as before.
 function setSearchEnabled(enabled: boolean): void {
   searchInput.disabled = !enabled;
   searchPrev.disabled = !enabled;
   searchNext.disabled = !enabled;
-  if (!enabled && searchController) {
-    searchController.clear();
-  }
 }
 
 function handleSearchInputKey(e: KeyboardEvent): void {
@@ -692,6 +693,8 @@ function focusSearch(): void {
   if (searchInput.disabled) {
     return;
   }
+  // In a narrow window the field is folded behind a button: unfold it first.
+  document.body.classList.add("search-open");
   searchInput.focus();
   searchInput.select();
 }
@@ -1483,6 +1486,8 @@ function initPreferences(): void {
     setLocale(value as Locale);
     document.documentElement.lang = value;
     applyTranslations(document);
+    // Home, folder view, sidebar and breadcrumb are built in JS: rebuild them.
+    void nav.reload();
     await savePref(LOCALE_KEY, value);
   });
 
@@ -1655,8 +1660,17 @@ function setSidebarOpen(open: boolean): void {
   } else {
     sidebarEl.removeAttribute("role");
     sidebarEl.removeAttribute("aria-modal");
-    sidebarOpener?.focus();
+    focusVisible(sidebarOpener);
     sidebarOpener = null;
+  }
+}
+
+/** Focus `el` if it is on screen, otherwise the document so focus is not lost. */
+function focusVisible(el: HTMLElement | null): void {
+  if (el && el.getClientRects().length > 0) {
+    el.focus();
+  } else if (activeScreen() === "doc") {
+    contentEl.focus({ preventScroll: true });
   }
 }
 
@@ -1667,10 +1681,11 @@ function setOutlineOpen(open: boolean): void {
 }
 
 function closeFolderMenu(returnFocus = false): void {
+  folderMenuOpening = false;
   if (folderMenu.hidden) return;
   folderMenu.hidden = true;
   folderSwitcher.setAttribute("aria-expanded", "false");
-  if (returnFocus) folderSwitcher.focus();
+  if (returnFocus) focusVisible(folderSwitcher);
 }
 
 /** Close every popover and panel; a new view never opens under one. */
@@ -1680,7 +1695,13 @@ function closeTransientUI(): void {
   setSidebarOpen(false);
 }
 
-function menuItem(label: string, onSelect: () => void, shortcut?: string, checked = false): HTMLButtonElement {
+function menuItem(
+  label: string,
+  onSelect: () => void,
+  shortcut?: string,
+  checked = false,
+  returnFocus = true
+): HTMLButtonElement {
   const item = document.createElement("button");
   item.type = "button";
   item.className = "menu-item";
@@ -1698,18 +1719,32 @@ function menuItem(label: string, onSelect: () => void, shortcut?: string, checke
     item.append(k);
   }
   item.addEventListener("click", () => {
-    closeFolderMenu(true);
+    closeFolderMenu(returnFocus);
     onSelect();
   });
   return item;
 }
 
+function menuSeparator(): HTMLElement {
+  const sep = document.createElement("div");
+  sep.className = "menu-sep";
+  sep.setAttribute("role", "separator");
+  return sep;
+}
+
+let folderMenuOpening = false;
+
 async function openFolderMenu(): Promise<void> {
+  folderMenuOpening = true;
   const recents = (await loadRecents()).filter((e) => e.kind === "folder").slice(0, 5);
+  // Closed (second click, Escape) while the recents were loading.
+  if (!folderMenuOpening) return;
+  folderMenuOpening = false;
   const items: HTMLElement[] = [];
   if (recents.length > 0) {
     const label = document.createElement("div");
     label.className = "menu-label";
+    label.setAttribute("role", "presentation");
     label.textContent = t("folderMenu.recents");
     items.push(label);
     for (const entry of recents) {
@@ -1717,12 +1752,13 @@ async function openFolderMenu(): Promise<void> {
         menuItem(extractRootName(entry.path), () => void openFolderPath(entry.path), undefined, entry.path === rootPath)
       );
     }
-    items.push(Object.assign(document.createElement("div"), { className: "menu-sep" }));
+    items.push(menuSeparator());
   }
   items.push(menuItem(t("folderMenu.open"), () => void openFolder(), "⇧⌘O"));
   items.push(menuItem(t("folderMenu.newWindow"), () => void openFolderInNewWindow(), "⇧⌘N"));
-  items.push(Object.assign(document.createElement("div"), { className: "menu-sep" }));
-  items.push(menuItem(t("folder.close"), closeFolder, "⇧⌘W"));
+  items.push(menuSeparator());
+  // Closing leads home, where the switcher is gone: focus goes to the page instead.
+  items.push(menuItem(t("folder.close"), closeFolder, "⇧⌘W", false, false));
   folderMenu.replaceChildren(...items);
   folderMenu.hidden = false;
   folderSwitcher.setAttribute("aria-expanded", "true");
@@ -1740,10 +1776,13 @@ folderMenu.addEventListener("keydown", (e) => {
     e.preventDefault();
     items[e.key === "Home" ? 0 : items.length - 1]?.focus();
   } else if (e.key === "Escape") {
+    // Only the menu closes, not the sidebar panel it sits in.
     e.preventDefault();
+    e.stopPropagation();
     closeFolderMenu(true);
   } else if (e.key === "Tab") {
-    closeFolderMenu();
+    // Leave from the switcher so Tab moves on from there.
+    closeFolderMenu(true);
   }
 });
 
@@ -1762,7 +1801,15 @@ document.addEventListener("click", (e) => {
 });
 
 document.addEventListener("keydown", (e) => {
-  if (e.key !== "Escape" || modalOpen()) return;
+  // ⌘↑: up to the enclosing folder, as in the Finder — but never while typing.
+  if (e.key === "ArrowUp" && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && !isEditable(e.target)) {
+    if (!modalOpen() && rootPath !== null && activeScreen() !== "home") {
+      e.preventDefault();
+      goUp();
+    }
+    return;
+  }
+  if (e.key !== "Escape" || modalOpen() || e.defaultPrevented) return;
   if (document.body.classList.contains("sidebar-open")) {
     setSidebarOpen(false);
   } else if (document.body.classList.contains("outline-open")) {
@@ -1770,6 +1817,11 @@ document.addEventListener("keydown", (e) => {
     outlineToggle.focus();
   }
 });
+
+function isEditable(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  return Boolean(el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)));
+}
 
 function initChrome(): void {
   navBackBtn.addEventListener("click", () => void nav.back());
@@ -1786,13 +1838,21 @@ function initChrome(): void {
     document.body.classList.add("search-open");
     focusSearch();
   });
-  searchInput.addEventListener("blur", () => {
-    if (!searchInput.value) document.body.classList.remove("search-open");
-  });
+  // Fold the compact field back only once focus has left the whole search UI
+  // (its buttons and options menu included) and there is no query.
+  for (const el of [searchBoxEl, searchOptionsMenu]) {
+    el.addEventListener("focusout", (e) => {
+      const next = e.relatedTarget as Node | null;
+      if (next && (searchBoxEl.contains(next) || searchOptionsMenu.contains(next))) return;
+      if (!searchInput.value && !searchOptionsMenu.classList.contains("visible")) {
+        document.body.classList.remove("search-open");
+      }
+    });
+  }
   prefsBtn.addEventListener("click", openPrefs);
   folderSwitcher.addEventListener("click", (e) => {
     e.stopPropagation();
-    if (folderMenu.hidden) void openFolderMenu();
+    if (folderMenu.hidden && !folderMenuOpening) void openFolderMenu();
     else closeFolderMenu(true);
   });
   window.addEventListener("resize", () => {
@@ -1874,11 +1934,21 @@ async function init(): Promise<void> {
     const sep = view.path.lastIndexOf("/");
     target = docEntry(view.path.substring(0, sep), view.path.substring(sep + 1));
   } else if (view.kind === "folder") {
-    target = { kind: "folder", rootPath: view.path, dir: [] };
+    // The last folder may be gone since (deleted, unmounted volume): then home.
+    const fromSaved = pending?.kind !== "folder";
+    if (!fromSaved || (await pathStatus(view.path)) === "dir") {
+      target = { kind: "folder", rootPath: view.path, dir: [] };
+    }
   }
   const ok = await commitInitial(target);
-  if (ok && view.kind === "file") await recordRecent(view.path, "file");
-  if (ok && view.kind === "folder") await recordRecent(view.path, "folder");
+  if (ok && target.kind === "doc" && target.rootPath) {
+    await saveRootPath(target.rootPath);
+    await recordRecent(`${target.rootPath}/${target.file}`, "file");
+  }
+  if (ok && target.kind === "folder" && target.rootPath) {
+    await saveRootPath(target.rootPath);
+    await recordRecent(target.rootPath, "folder");
+  }
   // A startup document that cannot be read still leaves the window usable.
   if (!ok && !nav.state().current && nav.pending() === 0) {
     await nav.navigate({ kind: "home", rootPath: null, dir: [] });
@@ -2028,13 +2098,30 @@ type Prepared =
       slow: boolean;
       listing: Listing;
       readme: string | null;
+      timings: DocTimings;
     };
+
+interface DocTimings {
+  start: number;
+  ping: number;
+  read: number;
+  parse: number;
+  images?: number;
+}
 
 type Built =
   | { kind: "home"; node: HTMLElement }
   | { kind: "folder"; node: HTMLElement; sidebar: HTMLElement; count: number }
   | { kind: "same-doc" }
-  | { kind: "doc"; node: HTMLElement; sidebar: HTMLElement; count: number; title: string; slow: boolean };
+  | {
+      kind: "doc";
+      node: DocumentFragment;
+      sidebar: HTMLElement;
+      count: number;
+      title: string;
+      slow: boolean;
+      timings: DocTimings;
+    };
 
 type Screen = "home" | "folder" | "doc";
 
@@ -2063,7 +2150,7 @@ async function buildHomeData(keptRoot: string | null): Promise<HomeData> {
   return { firstRun: recents.length === 0 && !lastRead, kept, resume, recents };
 }
 
-async function prepare(target: NavEntry): Promise<Prepared> {
+async function prepare(target: NavEntry, _stale: () => boolean, options: { reload: boolean }): Promise<Prepared> {
   if (target.kind === "home") {
     return { kind: "home", home: await buildHomeData(target.rootPath) };
   }
@@ -2073,23 +2160,30 @@ async function prepare(target: NavEntry): Promise<Prepared> {
     return { kind: "folder", listing, readme: findReadme(listing.entries)?.name ?? null };
   }
   // Same document, another heading: no need to read or render it again.
-  if (activeScreen() === "doc" && root === rootPath && target.file === activeFile) {
+  if (!options.reload && activeScreen() === "doc" && root === rootPath && target.file === activeFile) {
     return { kind: "same-doc" };
   }
   const fullPath = `${root}/${target.file}`;
   showLoadingSoon();
   try {
+    const t0 = performance.now();
+    if (debugOverlay.isVisible()) await invoke("ping");
+    const t1 = performance.now();
     const [{ text, slow }, listing] = await Promise.all([
       readDocumentText(fullPath, root),
-      listForNavigation(root, target.dir, false),
+      listForNavigation(root, target.dir, options.reload),
     ]);
+    const t2 = performance.now();
+    const html = parseMarkdown(text);
+    const t3 = performance.now();
     return {
       kind: "doc",
-      html: parseMarkdown(text),
+      html,
       fullPath,
       slow,
       listing,
       readme: findReadme(listing.entries)?.name ?? null,
+      timings: { start: t0, ping: t1 - t0, read: t2 - t1, parse: t3 - t2 },
     };
   } finally {
     hideLoading();
@@ -2152,19 +2246,26 @@ function build(p: Prepared, ctx: CommitContext): Built {
 
   const container = document.createElement("div");
   container.innerHTML = p.html;
+  const tImages = performance.now();
   resolveImagePaths(container, p.fullPath);
+  p.timings.images = performance.now() - tImages;
   addCopyButtons(container);
   addImageLightbox(container, openImageOverlay);
   interceptLinks(container, root, target.dir);
   const fileName = target.file!.split("/").pop()!;
   const title = container.querySelector("h1")?.textContent?.trim() || fileName;
+  // Moved off-page here so publishing is a single append, whatever the size
+  // (spreading the children into one call overflows on huge documents).
+  const content = document.createDocumentFragment();
+  while (container.firstChild) content.append(container.firstChild);
   return {
     kind: "doc",
-    node: container,
+    node: content,
     sidebar: buildFileList(p.listing, target.dir.length > 0, fileName, p.readme, entryActions),
     count: fileCount(p.listing),
     title,
     slow: p.slow,
+    timings: p.timings,
   };
 }
 
@@ -2178,10 +2279,25 @@ function publish(b: Built, ctx: CommitContext): void {
   syncNavButtons();
 }
 
+// What the last commit put on screen, for the decorations that follow it.
+let lastCommit: { sameDoc: boolean; timings: DocTimings | null; at: number } = {
+  sameDoc: false,
+  timings: null,
+  at: 0,
+};
+// Bumped on every commit: an async home refresh only lands on the view it started from.
+let viewToken = 0;
+
 function publishView(b: Built, ctx: CommitContext): void {
   const target = ctx.target;
+  viewToken += 1;
   closeTransientUI();
-  loadError.hidden = true;
+  hideLoadError();
+  lastCommit = {
+    sameDoc: b.kind === "same-doc",
+    timings: b.kind === "doc" ? b.timings : null,
+    at: Date.now(),
+  };
   if (b.kind === "same-doc") return;
 
   rootPath = target.rootPath;
@@ -2212,17 +2328,18 @@ function publishView(b: Built, ctx: CommitContext): void {
 
   if (b.kind === "doc") {
     currentDocTitle = b.title;
-    markdownEl.replaceChildren(...Array.from(b.node.childNodes));
+    markdownEl.replaceChildren(b.node);
     slowReadNotice.hidden = !(b.slow && !slowReadDismissed);
     buildOutline();
     // The search index points into the content just replaced: drop it until
-    // the decorations (Mermaid) are done, then rebuild it.
+    // the decorations (Mermaid) are done, then rebuild it. The query stays.
     searchController?.suspend();
     setSearchEnabled(false);
   } else {
     currentDocTitle = "";
     markdownEl.replaceChildren();
     if (scrollObserver) scrollObserver.disconnect();
+    searchController?.suspend();
     setSearchEnabled(false);
   }
 
@@ -2241,19 +2358,46 @@ function publishView(b: Built, ctx: CommitContext): void {
 
 async function decorate(ctx: DecorationContext): Promise<void> {
   const screen = ctx.target.kind;
+  if (screen === "doc" && lastCommit.sameDoc) {
+    // A heading of the document already on screen: just go there.
+    applyPositioning(contentEl, ctx.positioning);
+    return;
+  }
   if (screen === "doc") {
+    const timings = lastCommit.timings;
+    const tMermaid = performance.now();
     await renderMermaidDiagrams(ctx.isCurrent);
+    if (!ctx.isCurrent()) return;
+    const mermaidMs = performance.now() - tMermaid;
+    // A restored position is only right once images have their real height.
+    if (ctx.positioning.mode === "restore") await imagesSettled(markdownEl, 1500);
     if (!ctx.isCurrent()) return;
     applyPositioning(contentEl, ctx.positioning);
     setSearchEnabled(true);
     searchController?.reset({ scroll: !ctx.traversal && ctx.positioning.mode === "top" });
+    if (timings) {
+      debugOverlay.recordOpen({
+        file: ctx.target.file?.split("/").pop() ?? "",
+        total: performance.now() - timings.start,
+        phases: {
+          ping: timings.ping,
+          read: timings.read,
+          parse: timings.parse,
+          images: timings.images ?? 0,
+          mermaid: mermaidMs,
+          dom: 0,
+          outline: 0,
+        },
+      });
+    }
     if (rootPath && activeFile) {
+      // Dated when the document was opened, not when its diagrams finished.
       void writeLastRead({
         rootPath,
         file: activeFile,
         title: currentDocTitle,
         scrollTop: contentEl.scrollTop,
-        at: Date.now(),
+        at: lastCommit.at,
       });
     }
     return;
@@ -2267,20 +2411,20 @@ async function decorate(ctx: DecorationContext): Promise<void> {
 let programmaticScroll = false;
 let programmaticTimer: ReturnType<typeof setTimeout> | null = null;
 
-function applyPositioning(scroller: HTMLElement, positioning: Positioning): void {
+/** Scrolls about to happen are the app's doing; `scrollend` (or a timer) ends the window. */
+function markProgrammaticScroll(ms = 400): void {
   programmaticScroll = true;
   if (programmaticTimer !== null) clearTimeout(programmaticTimer);
-  // scrollend ends the window when supported; the timer is the fallback.
   programmaticTimer = setTimeout(() => {
     programmaticScroll = false;
-  }, 400);
+  }, ms);
+}
+
+function applyPositioning(scroller: HTMLElement, positioning: Positioning): void {
+  markProgrammaticScroll();
   if (positioning.mode === "anchor") {
-    const target = markdownEl.querySelector(`#${CSS.escape(positioning.anchor)}`);
-    if (target) {
-      target.scrollIntoView({ block: "start" });
-      return;
-    }
-    scroller.scrollTop = 0;
+    // A link to a heading that does not exist leaves the reader where they are.
+    markdownEl.querySelector(`#${CSS.escape(positioning.anchor)}`)?.scrollIntoView({ block: "start" });
   } else if (positioning.mode === "restore") {
     scroller.scrollTop = positioning.scrollTop;
   } else {
@@ -2303,6 +2447,23 @@ contentEl.addEventListener("scroll", () => {
   });
 });
 
+/** Resolves once the images of `root` have loaded (or failed), or after `timeoutMs`. */
+function imagesSettled(root: HTMLElement, timeoutMs: number): Promise<void> {
+  const pending = Array.from(root.querySelectorAll("img")).filter((img) => !img.complete);
+  if (pending.length === 0) return Promise.resolve();
+  const loads = pending.map(
+    (img) =>
+      new Promise<void>((resolve) => {
+        img.addEventListener("load", () => resolve(), { once: true });
+        img.addEventListener("error", () => resolve(), { once: true });
+      })
+  );
+  return Promise.race([
+    Promise.all(loads).then(() => undefined),
+    new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
+  ]);
+}
+
 function captureScroll(): number {
   const screen = activeScreen();
   if (screen === "doc") return contentEl.scrollTop;
@@ -2321,8 +2482,18 @@ function onNavigationError(error: unknown, target: NavEntry): void {
   if (activeScreen() !== "doc") {
     // The banner lives in the document card; on other screens show it on top.
     document.body.classList.add("show-load-error");
-    setTimeout(() => document.body.classList.remove("show-load-error"), 5000);
+    if (loadErrorTimer !== null) clearTimeout(loadErrorTimer);
+    loadErrorTimer = setTimeout(hideLoadError, 5000);
   }
+}
+
+let loadErrorTimer: ReturnType<typeof setTimeout> | null = null;
+
+function hideLoadError(): void {
+  if (loadErrorTimer !== null) clearTimeout(loadErrorTimer);
+  loadErrorTimer = null;
+  loadError.hidden = true;
+  document.body.classList.remove("show-load-error");
 }
 
 const nav: WindowNavigator = createNavigator<Prepared, Built>({
@@ -2352,7 +2523,10 @@ let homeDataKey = "";
 async function refreshHome(): Promise<void> {
   const current = nav.state().current;
   if (current?.kind !== "home") return;
+  const token = viewToken;
   const data = await buildHomeData(current.rootPath);
+  // Another view was committed meanwhile (closing the folder, opening one…).
+  if (token !== viewToken) return;
   const key = JSON.stringify(data);
   if (key === homeDataKey) return;
   homeDataKey = key;
@@ -2411,20 +2585,30 @@ const docCache = new Map<string, { mtime: number; text: string }>();
 let slowReadDismissed = false;
 let loadingTimer: ReturnType<typeof setTimeout> | null = null;
 
+// Several loads can overlap (a newer one supersedes an older): the spinner
+// stays until the last of them is done.
+let loadsInProgress = 0;
+
 function showLoadingSoon(): void {
+  loadsInProgress += 1;
+  if (loadsInProgress > 1) return;
   // Small delay so instant (cached) reads never flash a spinner.
-  if (loadingTimer !== null) clearTimeout(loadingTimer);
   loadingTimer = setTimeout(() => {
     contentLoading.hidden = false;
+    // The card may be hidden (opening from home or a folder): show it up top too.
+    navSpinner.hidden = false;
   }, 150);
 }
 
 function hideLoading(): void {
+  loadsInProgress = Math.max(0, loadsInProgress - 1);
+  if (loadsInProgress > 0) return;
   if (loadingTimer !== null) {
     clearTimeout(loadingTimer);
     loadingTimer = null;
   }
   contentLoading.hidden = true;
+  navSpinner.hidden = true;
 }
 
 slowReadDismiss.addEventListener("click", () => {
@@ -2488,8 +2672,12 @@ function buildOutline(): void {
     item.textContent = h.textContent;
     item.dataset.targetId = h.id;
     item.addEventListener("click", () => {
+      markProgrammaticScroll(1500);
       h.scrollIntoView({ behavior: "smooth" });
-      document.body.classList.remove("outline-open");
+      if (document.body.classList.contains("outline-open")) {
+        setOutlineOpen(false);
+        outlineToggle.focus();
+      }
     });
     outlineNav.appendChild(item);
     items.push({ el: item, heading: h });
@@ -2523,6 +2711,16 @@ function buildOutline(): void {
 
 // --- Link interception ---
 
+/** A heading of the open document; following the same link again scrolls again. */
+function goToAnchor(root: string, file: string, anchor: string): void {
+  if (nav.state().current?.anchor === anchor) {
+    markProgrammaticScroll(1500);
+    markdownEl.querySelector(`#${CSS.escape(anchor)}`)?.scrollIntoView({ behavior: "smooth" });
+    return;
+  }
+  void nav.navigate(docEntry(root, file, anchor));
+}
+
 function interceptLinks(container: HTMLElement, root: string, currentDir: string[]): void {
   const file = () => activeFile;
   for (const a of container.querySelectorAll("a")) {
@@ -2545,7 +2743,7 @@ function interceptLinks(container: HTMLElement, root: string, currentDir: string
         e.preventDefault();
         const anchor = decodeAnchor(href.slice(1));
         const current = file();
-        if (anchor && current) void nav.navigate(docEntry(root, current, anchor));
+        if (anchor && current) goToAnchor(root, current, anchor);
       });
       continue;
     }
@@ -2555,7 +2753,8 @@ function interceptLinks(container: HTMLElement, root: string, currentDir: string
         e.preventDefault();
         const { filePart, anchor } = parseMarkdownHref(href);
         const resolved = resolvePath([...currentDir], filePart);
-        void nav.navigate(docEntry(root, resolved, anchor));
+        if (anchor && resolved === file()) goToAnchor(root, resolved, anchor);
+        else void nav.navigate(docEntry(root, resolved, anchor));
       });
     }
   }
