@@ -34,9 +34,19 @@ export function extractRootName(path: string): string {
   return path.split("/").pop() || "root";
 }
 
+/** Extensions the app opens: the same list the Finder association and ⌘O accept. */
+export const MARKDOWN_EXTENSIONS = ["md", "markdown", "mdx"];
+
+/** True for a path or name ending in a Markdown extension, whatever its case. */
+export function isMarkdownName(name: string): boolean {
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0) return false;
+  return MARKDOWN_EXTENSIONS.includes(name.slice(dot + 1).toLowerCase());
+}
+
 /**
  * Filter and sort raw directory entries into sorted dirs-first entries.
- * Only includes directories and .md files, excludes dotfiles.
+ * Only includes directories and Markdown files, excludes dotfiles.
  */
 export function filterAndSortEntries(
   rawEntries: { name: string | undefined; isDirectory: boolean }[]
@@ -48,7 +58,7 @@ export function filterAndSortEntries(
     if (!entry.name || entry.name.startsWith(".")) continue;
     if (entry.isDirectory) {
       dirs.push({ name: entry.name, kind: "directory" });
-    } else if (entry.name.endsWith(".md")) {
+    } else if (isMarkdownName(entry.name)) {
       files.push({ name: entry.name, kind: "file" });
     }
   }
@@ -56,6 +66,35 @@ export function filterAndSortEntries(
   dirs.sort((a, b) => a.name.localeCompare(b.name));
   files.sort((a, b) => a.name.localeCompare(b.name));
   return [...dirs, ...files];
+}
+
+export type ListingStatus = "ok" | "missing" | "denied" | "error";
+
+/** A folder as the folder view and the sidebar show it. */
+export interface Listing {
+  status: ListingStatus;
+  /** Visible entries before keeping only folders and Markdown files. */
+  rawCount: number;
+  entries: Entry[];
+}
+
+export function summarizeListing(
+  rawEntries: { name: string | undefined; isDirectory: boolean }[]
+): Listing {
+  const rawCount = rawEntries.filter((e) => e.name && !e.name.startsWith(".")).length;
+  return { status: "ok", rawCount, entries: filterAndSortEntries(rawEntries) };
+}
+
+/** Map a failed directory read to what the folder view tells the reader. */
+export function listingStatusFromError(error: unknown): ListingStatus {
+  const text = String(error).toLowerCase();
+  if (text.includes("no such file") || text.includes("not found") || text.includes("os error 2")) {
+    return "missing";
+  }
+  if (text.includes("permission") || text.includes("denied") || text.includes("os error 1") || text.includes("os error 13")) {
+    return "denied";
+  }
+  return "error";
 }
 
 /**
@@ -70,7 +109,7 @@ export function classifyLink(
   if (href.startsWith("#")) {
     return "anchor";
   }
-  if (href.endsWith(".md") || href.includes(".md#")) {
+  if (isMarkdownName(href.split("#")[0])) {
     return "markdown";
   }
   return "other";
@@ -82,8 +121,18 @@ export function classifyLink(
 export function parseMarkdownHref(
   href: string
 ): { filePart: string; anchor: string | undefined } {
-  const [filePart, anchor] = href.split("#");
-  return { filePart, anchor };
+  const [filePart, rawAnchor] = href.split("#");
+  return { filePart, anchor: decodeAnchor(rawAnchor) };
+}
+
+/** `#` alone means no anchor; an undecodable fragment is used as written. */
+export function decodeAnchor(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
 }
 
 /**
@@ -118,14 +167,17 @@ export type InitialView =
  */
 export function resolveInitialView(
   pending: PendingOpen | null,
-  savedFolder: string | null
+  savedFolder: string | null,
+  reopenLastFolder = false
 ): InitialView {
   if (pending) {
     if (pending.kind === "file") return { kind: "file", path: pending.path };
     if (pending.kind === "folder") return { kind: "folder", path: pending.path };
     return { kind: "welcome" };
   }
-  if (savedFolder) return { kind: "folder", path: savedFolder };
+  // The last folder comes back only when the reader asked for it in the
+  // preferences; otherwise the app opens on the home screen ("Reprendre").
+  if (savedFolder && reopenLastFolder) return { kind: "folder", path: savedFolder };
   return { kind: "welcome" };
 }
 
@@ -160,4 +212,35 @@ export function mergeRecent(
   max: number
 ): RecentEntry[] {
   return [entry, ...list.filter((e) => e.path !== entry.path)].slice(0, max);
+}
+
+/** The last document read, across windows: what "Reprendre" offers on the home screen. */
+export interface LastRead {
+  rootPath: string;
+  file: string;
+  title: string;
+  scrollTop: number;
+  /** Time of the last reading activity (opening the document or scrolling it). */
+  at: number;
+}
+
+export function isLastRead(value: unknown): value is LastRead {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.rootPath === "string" &&
+    typeof v.file === "string" &&
+    typeof v.title === "string" &&
+    typeof v.scrollTop === "number" &&
+    typeof v.at === "number"
+  );
+}
+
+/** Never let an older reading activity overwrite a newer one written by another window. */
+export function shouldWriteLastRead(stored: unknown, next: LastRead): boolean {
+  if (!isLastRead(stored)) return true;
+  if (stored.rootPath === next.rootPath && stored.file === next.file) {
+    return next.at >= stored.at;
+  }
+  return next.at > stored.at;
 }
