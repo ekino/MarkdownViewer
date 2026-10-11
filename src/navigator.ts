@@ -266,6 +266,13 @@ export function createNavigator<P, B>(deps: NavigatorDeps<P, B>): Navigator {
     const from = pendingTraverse ? pendingTraverse.index : index;
     const to = from + step;
     if (to < 0 || to >= entries.length) return Promise.resolve(false);
+    // Back then Forward before the first one lands: back where the reader is.
+    // Drop the pending step and leave the view (and its position) alone.
+    if (pendingTraverse && to === index) {
+      requestGen += 1;
+      pendingTraverse = null;
+      return Promise.resolve(false);
+    }
     requestGen += 1;
     pendingTraverse = { gen: requestGen, index: to };
     return run({ kind: "traverse", index: to }, requestGen);

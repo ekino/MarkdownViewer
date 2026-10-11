@@ -403,6 +403,22 @@ describe("createNavigator", () => {
     expect(h.nav.state().current?.file).toBe("a.md");
   });
 
+  it("Back then Forward before Back lands keeps the view and its position", async () => {
+    const h = harness();
+    await start(h);
+    for (const f of ["a.md", "b.md"]) {
+      const p = h.nav.navigate(doc(f));
+      await h.finish(doc(f));
+      await p;
+    }
+    const back = h.nav.back();
+    expect(await h.nav.forward()).toBe(false);
+    await h.finish(doc("a.md"));
+    expect(await back).toBe(false);
+    expect(h.nav.state().current?.file).toBe("b.md");
+    expect(h.shown).toEqual(["home:", "doc:a.md", "doc:b.md"]);
+  });
+
   it("cancelPending drops a load in progress and keeps the view", async () => {
     const h = harness();
     await start(h, doc("a.md"));

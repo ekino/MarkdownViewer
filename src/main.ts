@@ -288,6 +288,16 @@ themeToggle.addEventListener("click", toggleTheme);
 
 let mermaidCounter = 0;
 
+// Mermaid is not safe for concurrent renders (shared temporary DOM): a pass
+// taking over from an interrupted one queues behind it.
+let mermaidQueue: Promise<unknown> = Promise.resolve();
+
+function renderMermaidSerially(id: string, source: string): ReturnType<typeof mermaid.render> {
+  const run = mermaidQueue.then(() => mermaid.render(id, source));
+  mermaidQueue = run.catch(() => undefined);
+  return run;
+}
+
 async function renderMermaidDiagrams(isCurrent: () => boolean = () => true): Promise<void> {
   const codeBlocks = markdownEl.querySelectorAll("pre > code.language-mermaid");
   if (codeBlocks.length === 0) return;
@@ -306,7 +316,7 @@ async function renderMermaidDiagrams(isCurrent: () => boolean = () => true): Pro
     }
 
     try {
-      const { svg } = await mermaid.render(id, source);
+      const { svg } = await renderMermaidSerially(id, source);
       if (!isCurrent()) {
         document.getElementById(id)?.remove();
         return;
@@ -631,7 +641,8 @@ function scheduleLastRead(snapshot: LastRead): void {
 
 async function openFolderPath(path: string): Promise<void> {
   const ok = await nav.navigate({ kind: "folder", rootPath: path, dir: [] });
-  if (ok) {
+  // A folder that cannot be listed is shown (its view says why), not promoted.
+  if (ok && committedListing?.status === "ok") {
     await saveRootPath(path);
     await recordRecent(path, "folder");
   }
@@ -712,12 +723,15 @@ function foldSearch(fromKeyboard = false): void {
   if (fromKeyboard && searchToggle.getClientRects().length > 0) searchToggle.focus();
 }
 
+// Same breakpoint as the CSS that folds the search field.
+const compactSearchMQ = window.matchMedia("(max-width: 1000px)");
+
 function focusSearch(): void {
   if (searchInput.disabled) {
     return;
   }
   // In a narrow window the field is folded behind a button: unfold it first.
-  document.body.classList.add("search-open");
+  if (compactSearchMQ.matches) document.body.classList.add("search-open");
   searchInput.focus();
   searchInput.select();
 }
@@ -2461,6 +2475,10 @@ async function decorate(ctx: DecorationContext): Promise<void> {
     // the reader has scrolled meanwhile.
   }
   if (screen === "doc") {
+    // Fresh document: put the reader in place right away (not at the previous
+    // document's offset); the position is settled again once diagrams and
+    // images have their final height, unless the reader scrolled meanwhile.
+    if (!lastCommit.sameDoc) applyPositioning(contentEl, ctx.positioning);
     const timings = lastCommit.timings;
     const tMermaid = performance.now();
     try {
@@ -2474,9 +2492,7 @@ async function decorate(ctx: DecorationContext): Promise<void> {
     // images have their real height.
     if (ctx.positioning.mode !== "top") await imagesSettled(markdownEl, 1500);
     if (!ctx.isCurrent()) return;
-    if (!lastCommit.sameDoc || !userScrolledSincePositioning) {
-      applyPositioning(contentEl, ctx.positioning);
-    }
+    if (!userScrolledSincePositioning) applyPositioning(contentEl, ctx.positioning);
     setSearchEnabled(true);
     searchController?.reset({
       scroll: !lastCommit.sameDoc && !ctx.traversal && ctx.positioning.mode === "top",
@@ -2837,6 +2853,7 @@ function buildOutline(): void {
     item.textContent = h.textContent;
     item.dataset.targetId = h.id;
     item.addEventListener("click", () => {
+      userScrolledSincePositioning = true;
       markProgrammaticScroll(1500);
       h.scrollIntoView({ behavior: "smooth" });
       if (document.body.classList.contains("outline-open")) {
@@ -2882,6 +2899,7 @@ function goToAnchor(root: string, file: string, anchor: string): void {
     // The reader chose to stay here: whatever was still loading is dropped.
     nav.cancelPending();
     endLoadingIndicator();
+    userScrolledSincePositioning = true;
     markProgrammaticScroll(1500);
     markdownEl.querySelector(`#${CSS.escape(anchor)}`)?.scrollIntoView({ behavior: "smooth" });
     return;
