@@ -12,7 +12,7 @@ A breadcrumb bar at the top shows your current location and lets you navigate ba
 
 Two folders can be read side by side, each in its own window:
 
-- **File › New Window** (`Cmd+N`) opens an empty window on the welcome screen.
+- **File › New Window** (`Cmd+N`) opens an empty window on the home screen.
 - **File › Open Folder in New Window…** (`Shift+Cmd+N`) picks a folder and opens
   it in a new window, leaving the current window untouched.
 
@@ -148,13 +148,15 @@ Click any image in the rendered Markdown to open it in a fullscreen overlay. Pre
 
 An auto-generated table of contents appears on the right side, built from `h2` and `h3` headings. The active heading is highlighted as you scroll through the document.
 
-## Dark Mode
+## Themes
 
-The app follows macOS system appearance by default. Click the theme toggle button (sun/moon icon) to switch manually. Your preference is persisted across sessions.
+Ten built-in themes — Speakino, Light, GitHub, Solarized and Sepia, each with a dark counterpart — plus your own, created in **Preferences › Themes** or imported from a JSON file.
+
+With **Follow macOS appearance** on (the default), you pick one theme for light mode and one for dark mode, and the app switches between them with the system. Turn it off to keep a single theme. The theme toggle button (sun/moon icon) in the top bar switches between your light and dark theme at any time. Your choices are persisted across sessions.
 
 ## PDF Export
 
-Click the PDF button in the sidebar header to export the current document as a PDF file. The export uses the native macOS `WKWebView.createPDF` API for high-quality rendering. A save dialog opens with a default filename based on the current markdown file. UI elements (sidebar, outline) are hidden during capture so only the document content is exported.
+Click the PDF button in the top bar to export the current document as a PDF file. The export uses the native macOS `WKWebView.createPDF` API for high-quality rendering. A save dialog opens with a default filename based on the current markdown file. UI elements (sidebar, outline) are hidden during capture so only the document content is exported.
 
 ## Session Persistence
 

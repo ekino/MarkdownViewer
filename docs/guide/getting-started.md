@@ -52,4 +52,4 @@ mdv ~/my-docs/README.md
 
 ## Examples
 
-The app includes a built-in **View examples** button on the welcome screen that loads sample documents showcasing all supported features. These examples cover code highlighting, math, diagrams, alerts, footnotes, tables, and more.
+The app includes a built-in **Explore the examples** button on the home screen that loads sample documents showcasing all supported features. These examples cover code highlighting, math, diagrams, alerts, footnotes, tables, and more.
