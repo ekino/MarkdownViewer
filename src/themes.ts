@@ -4,6 +4,8 @@ import githubJson from "./themes/github.json";
 import lightJson from "./themes/light.json";
 import nordJson from "./themes/nord.json";
 import sepiaJson from "./themes/sepia.json";
+import speakinoDarkJson from "./themes/speakino-dark.json";
+import speakinoLightJson from "./themes/speakino-light.json";
 import solarizedDarkJson from "./themes/solarized-dark.json";
 import solarizedLightJson from "./themes/solarized-light.json";
 
@@ -51,6 +53,8 @@ const BUILTIN_LIST: Theme[] = [
   solarizedDarkJson as Theme,
   nordJson as Theme,
   sepiaJson as Theme,
+  speakinoLightJson as Theme,
+  speakinoDarkJson as Theme,
 ];
 
 export const BUILTIN_THEMES: Record<ThemeId, Theme> = Object.fromEntries(

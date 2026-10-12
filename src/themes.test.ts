@@ -29,7 +29,7 @@ function validThemeFixture(overrides: Partial<Theme> = {}): Theme {
 }
 
 describe("BUILTIN_THEMES catalog", () => {
-  it("has exactly the eight expected themes", () => {
+  it("has exactly the ten expected themes", () => {
     const ids = Object.keys(BUILTIN_THEMES).sort();
     expect(ids).toEqual(
       [
@@ -41,6 +41,8 @@ describe("BUILTIN_THEMES catalog", () => {
         "sepia",
         "solarized-dark",
         "solarized-light",
+        "speakino-dark",
+        "speakino-light",
       ].sort()
     );
   });

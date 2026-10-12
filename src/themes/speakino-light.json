@@ -1,0 +1,22 @@
+{
+  "id": "speakino-light",
+  "name": "Speakino Light",
+  "isDark": false,
+  "pair": "speakino-dark",
+  "vars": {
+    "--bg": "#fffdf7",
+    "--sidebar-bg": "#f3efe5",
+    "--sidebar-hover": "#e7dfce",
+    "--sidebar-active": "#dcd3c0",
+    "--border": "#d9d0bd",
+    "--text": "#17130d",
+    "--text-muted": "#4a4237",
+    "--accent": "#b84a00",
+    "--accent-light": "#fff1c2",
+    "--code-bg": "#f6f2e8",
+    "--table-border": "#d9d0bd",
+    "--table-stripe": "#faf6ec",
+    "--search-hit": "#ffe08a",
+    "--search-hit-active": "#ffc629"
+  }
+}
