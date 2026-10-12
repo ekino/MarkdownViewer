@@ -156,7 +156,6 @@ function activeThemeId(): ThemeId {
   );
 }
 
-/** Choose a theme: it fills its light or dark slot, and is shown unless following macOS. */
 /**
  * Bring the fixed theme and the light/dark slots back in line with the
  * catalog after a theme was deleted, imported, renamed or switched between
@@ -175,16 +174,37 @@ function reconcileThemeChoices(renamed?: { from: ThemeId; to: ThemeId }): void {
   );
 }
 
-async function saveThemeChoices(): Promise<void> {
-  await savePrefs({
+type ThemeChoices = Record<string, ThemeId>;
+
+function themeChoices(): ThemeChoices {
+  return {
     [THEME_KEY]: currentThemeId,
     [DAY_THEME_KEY]: followThemes.day,
     [NIGHT_THEME_KEY]: followThemes.night,
-  });
+  };
+}
+
+/**
+ * Write the theme settings that changed since `before`, with `extra`, in one
+ * save. Only what changed: another window may have chosen the other slot
+ * meanwhile, and rewriting it from this window's memory would undo that.
+ */
+async function saveThemeChoices(
+  before: ThemeChoices,
+  extra: Record<string, unknown> = {}
+): Promise<void> {
+  const entries: Record<string, unknown> = { ...extra };
+  for (const [key, value] of Object.entries(themeChoices())) {
+    if (before[key] !== value) entries[key] = value;
+  }
+  if (Object.keys(entries).length > 0) await savePrefs(entries);
 }
 
 /** Choose a theme: it fills its light or dark slot, and is shown unless following macOS. */
-async function selectTheme(id: ThemeId): Promise<void> {
+async function selectTheme(
+  id: ThemeId,
+  before: ThemeChoices = themeChoices()
+): Promise<void> {
   const theme = themeCatalog[id];
   if (!theme) return;
   reconcileThemeChoices();
@@ -194,7 +214,7 @@ async function selectTheme(id: ThemeId): Promise<void> {
   if (!followSystem) currentThemeId = id;
   applyActiveTheme();
   refreshThemeGridSelection();
-  await saveThemeChoices();
+  await saveThemeChoices(before);
 }
 
 function applyActiveTheme(): void {
@@ -266,10 +286,11 @@ async function initTheme(): Promise<void> {
   // write the derived pair now, so it no longer depends on the fixed theme,
   // which changes as soon as the reader turns "follow macOS" off.
   if (savedDay !== followThemes.day || savedNight !== followThemes.night) {
-    await savePrefs({
+    // Best effort: a store that cannot be written must not stop startup.
+    savePrefs({
       [DAY_THEME_KEY]: followThemes.day,
       [NIGHT_THEME_KEY]: followThemes.night,
-    });
+    }).catch(() => {});
   }
   currentBodyFont = resolveInitialFontFamily(await store.get(BODY_FONT_KEY));
   currentCodeFont = resolveInitialFontFamily(await store.get(CODE_FONT_KEY));
@@ -333,6 +354,7 @@ async function exportPdf(): Promise<void> {
 
 async function toggleTheme(): Promise<void> {
   // Swap to the other slot: the reader's light theme for their dark one.
+  const before = themeChoices();
   reconcileThemeChoices();
   const activeId = activeThemeId();
   const newId = themeCatalog[activeId]?.isDark
@@ -341,7 +363,7 @@ async function toggleTheme(): Promise<void> {
   currentThemeId = newId;
   followSystem = false;
   applyActiveTheme();
-  await savePrefs({ [THEME_KEY]: newId, [FOLLOW_SYSTEM_KEY]: false });
+  await saveThemeChoices(before, { [FOLLOW_SYSTEM_KEY]: false });
   syncPrefsUI();
   refreshThemeGridSelection();
 }
@@ -610,7 +632,16 @@ async function syncFullscreen(): Promise<void> {
     // Not in Tauri (tests) or not allowed: keep the room for the lights.
   }
 }
-void appWindow.onResized(() => void syncFullscreen()).catch(() => {});
+// Resize events fire during the full-screen animation, before the window
+// reports its new state: check again once the transition is over.
+let fullscreenRecheck: ReturnType<typeof setTimeout> | undefined;
+void appWindow
+  .onResized(() => {
+    void syncFullscreen();
+    clearTimeout(fullscreenRecheck);
+    fullscreenRecheck = setTimeout(() => void syncFullscreen(), 800);
+  })
+  .catch(() => {});
 void syncFullscreen();
 
 // Keeps the native window title in sync with what the window shows. The title is
@@ -1237,10 +1268,11 @@ function buildThemeTile(theme: Theme): HTMLDivElement {
 }
 
 async function deleteCustomTheme(id: ThemeId): Promise<void> {
+  const before = themeChoices();
   customThemes = customThemes.filter((c) => c.id !== id);
   themeCatalog = buildThemeCatalog(customThemes);
   reconcileThemeChoices();
-  await saveThemeChoices();
+  await saveThemeChoices(before);
   applyActiveTheme();
   buildThemeGrid();
   refreshThemeGridSelection();
@@ -1520,13 +1552,14 @@ async function saveEditorTheme(): Promise<void> {
   }
 
   await persistCustomTheme(theme);
+  const before = themeChoices();
   const originalId = prefsEditorId.dataset.originalId;
   if (editorContext.editing && originalId && originalId !== id) {
     // A renamed theme keeps its place as the fixed theme and in its slot.
     reconcileThemeChoices({ from: originalId, to: id });
   }
   buildThemeGrid();
-  await selectTheme(theme.id);
+  await selectTheme(theme.id, before);
   editorPreviewSnapshot = null; // committed; no rollback
   closeEditor(false);
 }
@@ -1709,12 +1742,12 @@ function initPreferences(): void {
 
   prefsFollowSystem.addEventListener("change", async () => {
     // Turning it off keeps the theme on screen as the fixed one.
+    const before = themeChoices();
     if (!prefsFollowSystem.checked) currentThemeId = activeThemeId();
     followSystem = prefsFollowSystem.checked;
     applyActiveTheme();
     refreshThemeGridSelection();
-    await savePrefs({ [FOLLOW_SYSTEM_KEY]: followSystem });
-    await saveThemeChoices();
+    await saveThemeChoices(before, { [FOLLOW_SYSTEM_KEY]: followSystem });
   });
 
   prefsLanguage.addEventListener("change", async () => {

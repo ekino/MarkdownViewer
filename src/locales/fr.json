@@ -59,7 +59,7 @@
   "editor.field.name": "Nom",
   "editor.field.id": "Identifiant",
   "editor.field.mode": "Mode",
-  "editor.field.pair": "Thème jumeau",
+  "editor.field.pair": "Thème de l'autre mode (suggestion)",
   "editor.mode.light": "Clair",
   "editor.mode.dark": "Sombre",
   "editor.cancel": "Annuler",

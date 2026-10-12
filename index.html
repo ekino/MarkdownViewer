@@ -1145,7 +1145,7 @@
       cursor: pointer;
     }
 
-    .prefs-theme-tile:hover:not(.active) {
+    .prefs-theme-cell:hover .prefs-theme-tile:not(.active) {
       background: var(--ui-hover);
     }
 
@@ -1463,7 +1463,7 @@
 
     .prefs-editor-save {
       background: var(--accent);
-      color: white;
+      color: var(--ui-primary-text);
       border: none;
     }
 
@@ -2112,7 +2112,7 @@
         left: 0;
         z-index: 60;
         /* Clears the 52px title bar, as the docked sidebar does. */
-        padding-top: 50px;
+        padding-top: 52px;
         border-right: 2px solid var(--ui-card-line);
         box-shadow: 8px 0 28px rgba(23, 19, 13, 0.18);
         transform: translateX(-105%);
@@ -2176,6 +2176,9 @@
       --text: var(--ui-ink);
       --text-muted: var(--ui-ink-soft);
       --border: var(--ui-line);
+      --code-bg: var(--ui-cream);
+      --accent: var(--ui-primary-bg);
+      --accent-light: var(--ui-hover);
     }
 
     /* Markdown rendering */
