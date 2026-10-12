@@ -43,6 +43,9 @@ export interface Theme {
 export const THEME_KEY = "themeId";
 export const FOLLOW_SYSTEM_KEY = "followSystem";
 export const CUSTOM_THEMES_KEY = "customThemes";
+/** The themes used while following macOS: one for light mode, one for dark. */
+export const DAY_THEME_KEY = "dayThemeId";
+export const NIGHT_THEME_KEY = "nightThemeId";
 
 const BUILTIN_LIST: Theme[] = [
   lightJson as Theme,
@@ -196,6 +199,43 @@ export function resolveActiveThemeId(
     if (t.isDark === systemPrefersDark) return t.id;
   }
   return baseId;
+}
+
+export interface FollowThemes {
+  day: ThemeId;
+  night: ThemeId;
+}
+
+/**
+ * The light and dark themes used while following macOS. A saved choice wins
+ * when it still exists and has the right appearance; otherwise the slot is
+ * derived from the fixed theme (itself or its pair), then the builtins.
+ */
+export function resolveFollowThemes(
+  catalog: Record<ThemeId, Theme>,
+  baseId: ThemeId,
+  savedDay: unknown,
+  savedNight: unknown
+): FollowThemes {
+  const pick = (saved: unknown, dark: boolean): ThemeId => {
+    if (isThemeId(catalog, saved) && catalog[saved].isDark === dark) return saved;
+    return resolveActiveThemeId(catalog, baseId, true, dark);
+  };
+  return { day: pick(savedDay, false), night: pick(savedNight, true) };
+}
+
+/** The theme on screen: the fixed one, or the slot matching macOS. */
+export function resolveDisplayedThemeId(
+  catalog: Record<ThemeId, Theme>,
+  fixedId: ThemeId,
+  followSystem: boolean,
+  slots: FollowThemes,
+  systemPrefersDark: boolean
+): ThemeId {
+  if (!followSystem) return fixedId;
+  const id = systemPrefersDark ? slots.night : slots.day;
+  if (catalog[id]?.isDark === systemPrefersDark) return id;
+  return resolveActiveThemeId(catalog, fixedId, true, systemPrefersDark);
 }
 
 export function applyThemeToDOM(

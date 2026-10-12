@@ -175,7 +175,11 @@ export function resolveInitialOutlinePref(value: unknown): OutlinePref {
 
 export function setSegmentActive(group: HTMLElement, value: string): void {
   for (const btn of group.querySelectorAll<HTMLButtonElement>("button")) {
-    btn.classList.toggle("active", btn.dataset.value === value);
+    const on = btn.dataset.value === value;
+    btn.classList.toggle("active", on);
+    if (btn.getAttribute("role") === "radio") {
+      btn.setAttribute("aria-checked", String(on));
+    }
   }
 }
 

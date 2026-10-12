@@ -63,7 +63,9 @@ import {
   BUILTIN_THEMES,
   BUILTIN_THEME_ORDER,
   CUSTOM_THEMES_KEY,
+  DAY_THEME_KEY,
   FOLLOW_SYSTEM_KEY,
+  NIGHT_THEME_KEY,
   REQUIRED_VAR_KEYS,
   THEME_KEY,
   applyThemeToDOM,
@@ -71,8 +73,10 @@ import {
   isTheme,
   mergeCustomThemes,
   parseTheme,
-  resolveActiveThemeId,
+  resolveDisplayedThemeId,
+  resolveFollowThemes,
   resolveInitialThemeId,
+  type FollowThemes,
   sanitizeCustomThemes,
   type Theme,
   type ThemeId,
@@ -114,7 +118,7 @@ import {
   type Positioning,
 } from "./navigator";
 import { buildBreadcrumb, buildFileList, buildFolderView, buildHome, type HomeData } from "./screens";
-import { icon } from "./icons";
+import { appMark, icon } from "./icons";
 
 // --- Theme & preferences management ---
 
@@ -122,8 +126,12 @@ const themeToggle = document.getElementById(
   "theme-toggle"
 ) as HTMLButtonElement;
 
+// The theme shown when not following macOS, and the light/dark pair used when
+// following it. Choosing a theme also fills the slot matching its appearance,
+// so turning "follow macOS" on keeps the reader's latest choices.
 let currentThemeId: ThemeId = "light";
 let followSystem = false;
+let followThemes: FollowThemes = { day: "light", night: "dark" };
 let customThemes: Theme[] = [];
 let themeCatalog: Record<ThemeId, Theme> = { ...BUILTIN_THEMES };
 let currentBodyFont: string | null = null;
@@ -139,12 +147,28 @@ function isDark(): boolean {
 }
 
 function activeThemeId(): ThemeId {
-  return resolveActiveThemeId(
+  return resolveDisplayedThemeId(
     themeCatalog,
     currentThemeId,
     followSystem,
+    followThemes,
     systemDarkMQ.matches
   );
+}
+
+/** Choose a theme: it fills its light or dark slot, and is shown unless following macOS. */
+async function selectTheme(id: ThemeId): Promise<void> {
+  const theme = themeCatalog[id];
+  if (!theme) return;
+  const slotKey = theme.isDark ? NIGHT_THEME_KEY : DAY_THEME_KEY;
+  followThemes = theme.isDark
+    ? { ...followThemes, night: id }
+    : { ...followThemes, day: id };
+  if (!followSystem) currentThemeId = id;
+  applyActiveTheme();
+  refreshThemeGridSelection();
+  await savePref(slotKey, id);
+  if (!followSystem) await savePref(THEME_KEY, id);
 }
 
 function applyActiveTheme(): void {
@@ -204,6 +228,12 @@ async function initTheme(): Promise<void> {
     savedAppearance
   );
   followSystem = savedFollow === true;
+  followThemes = resolveFollowThemes(
+    themeCatalog,
+    currentThemeId,
+    await store.get(DAY_THEME_KEY),
+    await store.get(NIGHT_THEME_KEY)
+  );
   currentBodyFont = resolveInitialFontFamily(await store.get(BODY_FONT_KEY));
   currentCodeFont = resolveInitialFontFamily(await store.get(CODE_FONT_KEY));
   currentFontWeight = resolveInitialFontWeight(
@@ -265,8 +295,11 @@ async function exportPdf(): Promise<void> {
 }
 
 async function toggleTheme(): Promise<void> {
+  // Swap to the other slot: the reader's light theme for their dark one.
   const activeId = activeThemeId();
-  const newId = themeCatalog[activeId]?.pair ?? activeId;
+  const newId = themeCatalog[activeId]?.isDark
+    ? followThemes.day
+    : followThemes.night;
   currentThemeId = newId;
   followSystem = false;
   applyActiveTheme();
@@ -819,21 +852,35 @@ const prefsBackdrop = document.getElementById(
   "prefs-backdrop"
 ) as HTMLDivElement;
 const prefsClose = document.getElementById("prefs-close") as HTMLButtonElement;
-const prefsDone = document.getElementById("prefs-done") as HTMLButtonElement;
 const prefsFontSize = document.getElementById(
   "prefs-fontsize"
-) as HTMLSelectElement;
+) as HTMLDivElement;
 const prefsOutline = document.getElementById("prefs-outline") as HTMLDivElement;
+const prefsOutlineHint = document.getElementById(
+  "prefs-outline-hint"
+) as HTMLParagraphElement;
 const prefsFinderOpen = document.getElementById(
   "prefs-finder-open"
-) as HTMLDivElement;
-const prefsLaunch = document.getElementById("prefs-launch") as HTMLDivElement;
+) as HTMLSelectElement;
+const prefsLaunch = document.getElementById("prefs-launch") as HTMLSelectElement;
 const prefsTabs = document.querySelectorAll<HTMLButtonElement>(".prefs-tab");
 const prefsTabPanels =
   document.querySelectorAll<HTMLDivElement>(".prefs-tab-panel");
-const prefsThemeGrid = document.getElementById(
-  "prefs-theme-grid"
+const prefsThemeGridLight = document.getElementById(
+  "prefs-theme-grid-light"
 ) as HTMLDivElement;
+const prefsThemeGridDark = document.getElementById(
+  "prefs-theme-grid-dark"
+) as HTMLDivElement;
+const prefsGridLightLabel = document.getElementById(
+  "prefs-grid-light-label"
+) as HTMLHeadingElement;
+const prefsGridDarkLabel = document.getElementById(
+  "prefs-grid-dark-label"
+) as HTMLHeadingElement;
+const prefsThemeSentence = document.getElementById(
+  "prefs-theme-sentence"
+) as HTMLParagraphElement;
 const prefsFollowSystem = document.getElementById(
   "prefs-follow-system"
 ) as HTMLInputElement;
@@ -880,18 +927,9 @@ const prefsEditorCancel = document.getElementById(
 const prefsEditorSave = document.getElementById(
   "prefs-editor-save"
 ) as HTMLButtonElement;
-const prefsAdvancedToggle = document.getElementById(
-  "prefs-advanced-toggle"
-) as HTMLButtonElement;
 const prefsAdvancedReset = document.getElementById(
   "prefs-advanced-reset"
 ) as HTMLButtonElement;
-const prefsAdvanced = document.getElementById(
-  "prefs-advanced"
-) as HTMLDivElement;
-const prefsAdvancedCaret = document.getElementById(
-  "prefs-advanced-caret"
-) as HTMLSpanElement;
 const prefsBodyFont = document.getElementById(
   "prefs-body-font"
 ) as HTMLSelectElement;
@@ -934,14 +972,17 @@ function syncPrefsUI(): void {
   prefsFollowSystem.checked = followSystem;
   prefsLanguage.value = getLocale();
   refreshThemeGridSelection();
-  prefsFontSize.value =
-    (document.documentElement.dataset.fontsize as FontSize) ?? "medium";
   setSegmentActive(
-    prefsOutline,
+    prefsFontSize,
+    (document.documentElement.dataset.fontsize as FontSize) ?? "medium"
+  );
+  syncOutlineUI(
     (document.documentElement.dataset.outline as OutlinePref) ?? "auto"
   );
-  setSegmentActive(prefsFinderOpen, finderOpenPref);
-  setSegmentActive(prefsLaunch, launchPref);
+  prefsFinderOpen.value = finderOpenPref;
+  prefsLaunch.value = launchPref;
+  // The selects take their width once their values (and fonts) are set.
+  requestAnimationFrame(fitInlineSelects);
   prefsBodyFont.value = currentBodyFont ?? "";
   prefsCodeFont.value = currentCodeFont ?? "";
   prefsFontWeight.value = currentFontWeight ?? "";
@@ -949,19 +990,92 @@ function syncPrefsUI(): void {
     currentCustomFontSize !== null ? String(currentCustomFontSize) : "";
 }
 
-function refreshThemeGridSelection(): void {
-  if (!prefsThemeGrid) return;
-  const activeId = currentThemeId;
-  for (const tile of prefsThemeGrid.querySelectorAll<HTMLButtonElement>(
-    ".prefs-theme-tile"
-  )) {
-    tile.classList.toggle("active", tile.dataset.themeId === activeId);
+// A <select> is as wide as its longest option; inside a sentence it should
+// be as wide as the choice it shows.
+let selectProbe: HTMLSpanElement | null = null;
+
+function fitInlineSelect(select: HTMLSelectElement): void {
+  if (!selectProbe) {
+    selectProbe = document.createElement("span");
+    selectProbe.setAttribute("aria-hidden", "true");
+    selectProbe.style.cssText =
+      "position:absolute;visibility:hidden;white-space:pre;left:-9999px;top:0";
+    document.body.append(selectProbe);
   }
-  prefsThemeGrid.classList.toggle("disabled", followSystem);
+  const style = getComputedStyle(select);
+  selectProbe.style.font = style.font;
+  selectProbe.style.fontWeight = style.fontWeight;
+  selectProbe.textContent = select.selectedOptions[0]?.textContent ?? "";
+  const pad =
+    parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) + 2;
+  select.style.width = `${Math.ceil(selectProbe.offsetWidth + pad)}px`;
+}
+
+function fitInlineSelects(): void {
+  for (const select of prefsBackdrop.querySelectorAll<HTMLSelectElement>(
+    "select.prefs-inline"
+  )) {
+    fitInlineSelect(select);
+  }
+}
+
+function syncOutlineUI(pref: OutlinePref): void {
+  setSegmentActive(prefsOutline, pref);
+  prefsOutlineHint.textContent = t(`prefs.outline.hint.${pref}`);
+}
+
+/** The themes in use: both slots while following macOS, else the fixed one. */
+function chosenThemeIds(): Set<ThemeId> {
+  return followSystem
+    ? new Set([followThemes.day, followThemes.night])
+    : new Set([currentThemeId]);
+}
+
+function themeNameSpan(id: ThemeId): HTMLSpanElement {
+  const span = document.createElement("span");
+  span.className = "prefs-theme-name-inline";
+  span.textContent = themeCatalog[id]?.name ?? id;
+  return span;
+}
+
+function refreshThemeGridSelection(): void {
+  const chosen = chosenThemeIds();
+  for (const grid of [prefsThemeGridLight, prefsThemeGridDark]) {
+    for (const tile of grid.querySelectorAll<HTMLButtonElement>(
+      ".prefs-theme-tile"
+    )) {
+      const on = chosen.has(tile.dataset.themeId ?? "");
+      tile.classList.toggle("active", on);
+      tile.setAttribute("aria-pressed", String(on));
+    }
+  }
+  prefsGridLightLabel.textContent = t(
+    followSystem ? "prefs.themes.day" : "prefs.themes.light"
+  );
+  prefsGridDarkLabel.textContent = t(
+    followSystem ? "prefs.themes.night" : "prefs.themes.dark"
+  );
+  // "By day, read in X. By night, in Y." or "Always read in X."
+  if (followSystem) {
+    prefsThemeSentence.replaceChildren(
+      `${t("prefs.themes.day.before")} `,
+      themeNameSpan(followThemes.day),
+      `${t("prefs.themes.night.before")} `,
+      themeNameSpan(followThemes.night),
+      t("prefs.sentence.end")
+    );
+  } else {
+    prefsThemeSentence.replaceChildren(
+      `${t("prefs.themes.fixed.before")} `,
+      themeNameSpan(currentThemeId),
+      t("prefs.sentence.end")
+    );
+  }
 }
 
 function buildThemeGrid(): void {
-  prefsThemeGrid.innerHTML = "";
+  prefsThemeGridLight.replaceChildren();
+  prefsThemeGridDark.replaceChildren();
   const order: ThemeId[] = [
     ...BUILTIN_THEME_ORDER,
     ...customThemes
@@ -971,7 +1085,9 @@ function buildThemeGrid(): void {
   for (const id of order) {
     const theme = themeCatalog[id];
     if (!theme) continue;
-    prefsThemeGrid.appendChild(buildThemeTile(theme));
+    (theme.isDark ? prefsThemeGridDark : prefsThemeGridLight).appendChild(
+      buildThemeTile(theme)
+    );
   }
 }
 
@@ -1066,12 +1182,7 @@ function buildThemeTile(theme: Theme): HTMLButtonElement {
 
   tile.appendChild(actions);
 
-  tile.addEventListener("click", async () => {
-    currentThemeId = theme.id;
-    applyActiveTheme();
-    refreshThemeGridSelection();
-    await savePref(THEME_KEY, theme.id);
-  });
+  tile.addEventListener("click", () => selectTheme(theme.id));
 
   return tile;
 }
@@ -1083,6 +1194,14 @@ async function deleteCustomTheme(id: ThemeId): Promise<void> {
     currentThemeId = "light";
     await savePref(THEME_KEY, currentThemeId);
   }
+  followThemes = resolveFollowThemes(
+    themeCatalog,
+    currentThemeId,
+    followThemes.day,
+    followThemes.night
+  );
+  await savePref(DAY_THEME_KEY, followThemes.day);
+  await savePref(NIGHT_THEME_KEY, followThemes.night);
   applyActiveTheme();
   buildThemeGrid();
   refreshThemeGridSelection();
@@ -1123,11 +1242,8 @@ async function importCustomTheme(jsonText: string): Promise<boolean> {
   const theme = parseTheme(jsonText);
   if (!theme) return false;
   await persistCustomTheme(theme);
-  currentThemeId = theme.id;
-  applyActiveTheme();
   buildThemeGrid();
-  refreshThemeGridSelection();
-  await savePref(THEME_KEY, theme.id);
+  await selectTheme(theme.id);
   return true;
 }
 
@@ -1365,11 +1481,8 @@ async function saveEditorTheme(): Promise<void> {
   }
 
   await persistCustomTheme(theme);
-  currentThemeId = theme.id;
-  await savePref(THEME_KEY, theme.id);
   buildThemeGrid();
-  applyActiveTheme();
-  refreshThemeGridSelection();
+  await selectTheme(theme.id);
   editorPreviewSnapshot = null; // committed; no rollback
   closeEditor(false);
 }
@@ -1418,12 +1531,6 @@ function openPrefs(): void {
   });
 }
 
-function setAdvancedOpen(open: boolean): void {
-  prefsAdvanced.classList.toggle("visible", open);
-  prefsAdvancedToggle.setAttribute("aria-expanded", String(open));
-  prefsAdvancedCaret.textContent = open ? "▾" : "▸";
-}
-
 function closePrefs(): void {
   prefsBackdrop.classList.remove("visible");
   const generation = prefsGeneration;
@@ -1436,13 +1543,11 @@ function closePrefs(): void {
     // Reset transient UI state so the next open lands on a clean default:
     // - close the theme editor if it was open (no preview rollback needed —
     //   user explicitly closed the modal, treat it as a Cancel),
-    // - collapse the advanced typography section,
     // - jump to the General tab,
     // - reset the body scroll to the top.
     if (prefsPanelAppearance.classList.contains("prefs-editor-mode")) {
       closeEditor(true);
     }
-    setAdvancedOpen(false);
     setActiveTab("general");
     const body = prefsBackdrop.querySelector<HTMLDivElement>(".prefs-body");
     if (body) body.scrollTop = 0;
@@ -1458,8 +1563,11 @@ async function savePref<T>(key: string, value: T): Promise<void> {
 }
 
 function initPreferences(): void {
+  prefsBackdrop.addEventListener("change", (e) => {
+    if (e.target instanceof HTMLSelectElement) fitInlineSelect(e.target);
+  });
+  document.getElementById("prefs-mark")!.innerHTML = appMark(46);
   prefsClose.addEventListener("click", closePrefs);
-  prefsDone.addEventListener("click", closePrefs);
   prefsBackdrop.addEventListener("click", (e) => {
     if (e.target === prefsBackdrop) closePrefs();
   });
@@ -1511,10 +1619,13 @@ function initPreferences(): void {
   buildThemeGrid();
 
   prefsFollowSystem.addEventListener("change", async () => {
+    // Turning it off keeps the theme on screen as the fixed one.
+    if (!prefsFollowSystem.checked) currentThemeId = activeThemeId();
     followSystem = prefsFollowSystem.checked;
     applyActiveTheme();
     refreshThemeGridSelection();
     await savePref(FOLLOW_SYSTEM_KEY, followSystem);
+    if (!followSystem) await savePref(THEME_KEY, currentThemeId);
   });
 
   prefsLanguage.addEventListener("change", async () => {
@@ -1526,6 +1637,8 @@ function initPreferences(): void {
     // Home, folder view, sidebar, breadcrumb and a few labels inside the
     // document are built in JS: rebuild them in the new language.
     relabelScreen();
+    // The outline hint and the theme sentence are written in JS too.
+    syncPrefsUI();
     await savePref(LOCALE_KEY, value);
   });
 
@@ -1567,11 +1680,16 @@ function initPreferences(): void {
     recomputeEditorId();
   });
 
-  prefsFontSize.addEventListener("change", async () => {
-    const value = prefsFontSize.value as FontSize;
-    applyFontSize(value);
-    await savePref(FONTSIZE_KEY, value);
-  });
+  for (const btn of prefsFontSize.querySelectorAll<HTMLButtonElement>(
+    "button"
+  )) {
+    btn.addEventListener("click", async () => {
+      const value = btn.dataset.value as FontSize;
+      applyFontSize(value);
+      setSegmentActive(prefsFontSize, value);
+      await savePref(FONTSIZE_KEY, value);
+    });
+  }
 
   for (const btn of prefsOutline.querySelectorAll<HTMLButtonElement>(
     "button"
@@ -1579,34 +1697,21 @@ function initPreferences(): void {
     btn.addEventListener("click", async () => {
       const value = btn.dataset.value as OutlinePref;
       applyOutlinePref(value);
-      setSegmentActive(prefsOutline, value);
+      syncOutlineUI(value);
       await savePref(OUTLINE_PREF_KEY, value);
     });
   }
 
-  for (const btn of prefsFinderOpen.querySelectorAll<HTMLButtonElement>(
-    "button"
-  )) {
-    btn.addEventListener("click", async () => {
-      const value = btn.dataset.value as FinderOpenPref;
-      finderOpenPref = value;
-      setSegmentActive(prefsFinderOpen, value);
-      await savePref(FINDER_OPEN_KEY, value);
-    });
-  }
+  prefsFinderOpen.addEventListener("change", async () => {
+    const value = prefsFinderOpen.value as FinderOpenPref;
+    finderOpenPref = value;
+    await savePref(FINDER_OPEN_KEY, value);
+  });
 
-  for (const btn of prefsLaunch.querySelectorAll<HTMLButtonElement>("button")) {
-    btn.addEventListener("click", async () => {
-      const value = btn.dataset.value as LaunchPref;
-      launchPref = value;
-      setSegmentActive(prefsLaunch, value);
-      await savePref(LAUNCH_KEY, value);
-    });
-  }
-
-  prefsAdvancedToggle.addEventListener("click", () => {
-    const open = !prefsAdvanced.classList.contains("visible");
-    setAdvancedOpen(open);
+  prefsLaunch.addEventListener("change", async () => {
+    const value = prefsLaunch.value as LaunchPref;
+    launchPref = value;
+    await savePref(LAUNCH_KEY, value);
   });
 
   prefsBodyFont.addEventListener("change", async () => {

@@ -11,6 +11,8 @@ import {
   mergeCustomThemes,
   parseTheme,
   resolveActiveThemeId,
+  resolveDisplayedThemeId,
+  resolveFollowThemes,
   resolveInitialThemeId,
   sanitizeCustomThemes,
   VALID_THEME_ID_RE,
@@ -489,5 +491,39 @@ describe("applyThemeToDOM", () => {
   it("does nothing if the themeId is unknown", () => {
     applyThemeToDOM(BUILTIN_THEMES, root, "nope");
     expect(root.dataset.themeId).toBeUndefined();
+  });
+});
+
+describe("day and night themes", () => {
+  const catalog = BUILTIN_THEMES;
+
+  it("keeps saved slots that exist and have the right appearance", () => {
+    expect(resolveFollowThemes(catalog, "light", "github", "nord")).toEqual({
+      day: "github",
+      night: "nord",
+    });
+  });
+
+  it("derives missing or mismatched slots from the fixed theme and its pair", () => {
+    expect(resolveFollowThemes(catalog, "speakino-light", undefined, "github")).toEqual({
+      day: "speakino-light",
+      night: "speakino-dark",
+    });
+    expect(resolveFollowThemes(catalog, "speakino-dark", "gone", null)).toEqual({
+      day: "speakino-light",
+      night: "speakino-dark",
+    });
+  });
+
+  it("shows the fixed theme unless following macOS", () => {
+    const slots = { day: "github", night: "nord" };
+    expect(resolveDisplayedThemeId(catalog, "sepia", false, slots, true)).toBe("sepia");
+    expect(resolveDisplayedThemeId(catalog, "sepia", true, slots, false)).toBe("github");
+    expect(resolveDisplayedThemeId(catalog, "sepia", true, slots, true)).toBe("nord");
+  });
+
+  it("falls back to the fixed theme's pair when a slot no longer fits", () => {
+    const slots = { day: "github", night: "light" };
+    expect(resolveDisplayedThemeId(catalog, "light", true, slots, true)).toBe("dark");
   });
 });

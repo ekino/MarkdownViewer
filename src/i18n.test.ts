@@ -186,7 +186,6 @@ describe("FR and EN catalogs — parity", () => {
   // fallback chain would degrade for that key.
   const SAMPLE_KEYS = [
     "prefs.title",
-    "prefs.done",
     "prefs.tab.general",
     "prefs.tab.fonts",
     "prefs.tab.appearance",

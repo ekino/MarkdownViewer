@@ -703,12 +703,14 @@
       background: rgba(23, 19, 13, 0.28);
     }
 
-    /* Preferences modal — macOS-style sheet */
+    /* Preferences — Speakino's settings: a yellow sheet of cards, settings
+       written as sentences with the choice inline. Chrome tokens only: the
+       sheet follows the interface's light/dark, not the document theme. */
     .prefs-backdrop {
       position: fixed;
       inset: 0;
       z-index: 2000;
-      background: rgba(0, 0, 0, 0.35);
+      background: rgba(23, 19, 13, 0.42);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -737,49 +739,104 @@
     }
 
     .prefs-panel {
-      width: 640px;
+      width: 800px;
       max-width: calc(100vw - 40px);
-      max-height: calc(100vh - 40px);
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
-      overflow: hidden;
+      height: min(712px, calc(100vh - 40px));
       display: flex;
       flex-direction: column;
+      background: var(--ui-stage);
+      color: var(--ui-ink);
+      border: 2px solid var(--ui-card-line);
+      border-radius: 20px;
+      box-shadow: 7px 7px 0 var(--ui-card-shadow);
+      font-family: var(--ui-font);
+      overflow: hidden;
       transform: translateY(-12px);
       transition: transform 0.18s;
     }
 
-    .prefs-tabs {
+    .prefs-backdrop.visible .prefs-panel {
+      transform: translateY(0);
+    }
+
+    .prefs-header {
       display: flex;
-      gap: 4px;
-      padding: 10px 18px 0;
-      border-bottom: 1px solid var(--border);
-      background: var(--sidebar-bg);
+      align-items: center;
+      gap: 12px;
+      padding: 22px 27px 18px 24px;
+      flex-wrap: wrap;
+    }
+
+    .prefs-mark {
+      display: flex;
+      margin: -4px;
+    }
+
+    .prefs-title {
+      margin: 0;
+      font-size: 36px;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      line-height: 1;
+    }
+
+    .prefs-tabs {
+      margin-left: auto;
+      display: flex;
+      gap: 3px;
+      padding: 3px;
+      border: 2px solid var(--ui-card-line);
+      border-radius: 12px;
+      background: var(--ui-card);
+      box-shadow: 3px 3px 0 var(--ui-card-shadow);
     }
 
     .prefs-tab {
-      background: none;
+      padding: 7px 14px;
       border: none;
-      padding: 8px 14px;
-      font-size: 13px;
-      font-weight: 500;
-      color: var(--text-muted);
+      border-radius: 8px;
+      background: transparent;
+      color: var(--ui-ink);
+      font: 800 14px var(--ui-font);
       cursor: pointer;
-      font-family: inherit;
-      border-bottom: 2px solid transparent;
-      margin-bottom: -1px;
-      transition: color 0.15s, border-color 0.15s;
     }
 
-    .prefs-tab:hover {
-      color: var(--text);
+    .prefs-tab:hover:not(.active) {
+      background: var(--ui-hover);
     }
 
     .prefs-tab.active {
-      color: var(--accent);
-      border-bottom-color: var(--accent);
+      background: var(--ui-primary-bg);
+      color: var(--ui-primary-text);
+    }
+
+    .prefs-close {
+      width: 38px;
+      height: 34px;
+      margin-left: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 2px solid var(--ui-key-line);
+      border-radius: 8px;
+      background: var(--ui-cream);
+      box-shadow: 0 3px 0 var(--ui-key-line);
+      color: var(--ui-ink);
+      cursor: pointer;
+    }
+
+    .prefs-close:active {
+      transform: translateY(3px);
+      box-shadow: none;
+    }
+
+    .prefs-body {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      /* The cards' hard shadow sticks out 5px on the right: as much more
+         padding there, so the sheet looks centred (as in Speakino). */
+      padding: 4px 29px 18px 24px;
     }
 
     .prefs-tab-panel {
@@ -787,146 +844,443 @@
     }
 
     .prefs-tab-panel.active {
+      display: block;
+    }
+
+    .prefs-cards {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      align-items: start;
+    }
+
+    .prefs-card {
+      min-width: 0;
       display: flex;
       flex-direction: column;
+      gap: 12px;
+      padding: 18px;
+      background: var(--ui-card);
+      color: var(--ui-ink);
+      border: 2px solid var(--ui-card-line);
+      border-radius: 16px;
+      box-shadow: 5px 5px 0 var(--ui-card-shadow);
+    }
+
+    .prefs-card--wide {
+      grid-column: 1 / -1;
+    }
+
+    .prefs-card--cream {
+      background: var(--ui-cream);
+    }
+
+    .prefs-card--ink {
+      background: var(--ui-ink-card);
+      color: var(--ui-ink-card-text);
+      box-shadow: 5px 5px 0 var(--ui-orange);
+    }
+
+    .prefs-card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .prefs-eyebrow {
+      margin: 0;
+      font: 500 11px var(--ui-mono);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .prefs-card--ink .prefs-eyebrow {
+      color: var(--ui-ink-card-accent);
+    }
+
+    .prefs-sentence {
+      margin: 0;
+      font-size: 19px;
+      font-weight: 600;
+      line-height: 1.6;
+    }
+
+    /* A choice inside a sentence: yellow, underlined in ink. */
+    .prefs-inline {
+      appearance: none;
+      -webkit-appearance: none;
+      max-width: 100%;
+      margin: 0 1px;
+      padding: 0 20px 0 4px;
+      border: none;
+      border-bottom: 3px solid #17130d;
+      border-radius: 0;
+      background: var(--ui-yellow)
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2317130D' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")
+        no-repeat right 4px center;
+      color: #17130d;
+      font: inherit;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .prefs-number {
+      width: 4.2em;
+      padding-right: 4px;
+      background-image: none;
+      cursor: text;
+    }
+
+    .prefs-number::-webkit-inner-spin-button,
+    .prefs-number::-webkit-outer-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+
+    .prefs-number::placeholder {
+      color: #4a4237;
+    }
+
+    .prefs-hint {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--ui-ink-card-soft);
+    }
+
+    /* Inside the ink card: outlined in the accent, filled when chosen. */
+    .prefs-segment {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .prefs-segment button {
+      padding: 6px 12px;
+      border: 2px solid var(--ui-ink-card-accent);
+      border-radius: 10px;
+      background: transparent;
+      color: var(--ui-ink-card-accent);
+      font: 800 14px var(--ui-font);
+      cursor: pointer;
+    }
+
+    .prefs-segment button.active {
+      background: var(--ui-ink-card-accent);
+      color: var(--ui-ink-card);
+    }
+
+    .prefs-size-card {
+      display: grid;
+      grid-template-columns: 240px 1fr;
       gap: 18px;
+    }
+
+    .prefs-size-col {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .prefs-sizes {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .prefs-sizes button {
+      height: 46px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 14px;
+      border: 2px solid var(--ui-key-line);
+      border-radius: 10px;
+      background: var(--ui-card);
+      box-shadow: 0 3px 0 var(--ui-key-line);
+      color: var(--ui-ink);
+      font: 800 15px var(--ui-font);
+      cursor: pointer;
+    }
+
+    .prefs-sizes button.active {
+      background: var(--ui-primary-bg);
+      color: var(--ui-primary-text);
+      box-shadow: none;
+      transform: translateY(3px);
+    }
+
+    .prefs-size-glyph {
+      width: 34px;
+      font: 600 15px var(--ui-sys);
+      line-height: 1;
+    }
+
+    .prefs-sizes button[data-value="medium"] .prefs-size-glyph {
+      font-size: 19px;
+    }
+
+    .prefs-sizes button[data-value="large"] .prefs-size-glyph {
+      font-size: 24px;
+    }
+
+    /* A sample of the document that follows the reading settings live. */
+    .prefs-preview {
+      min-width: 0;
+      overflow: hidden;
+      padding: 18px 20px;
+      background: var(--ui-paper);
+      color: var(--ui-ink);
+      border: 2px solid var(--ui-card-line);
+      border-radius: 12px;
+      font-family: var(--md-body-font, var(--ui-sys));
+      font-weight: var(--md-body-weight, 400);
+      font-size: var(--md-body-size, 15px);
+      line-height: 1.6;
+    }
+
+    html[data-fontsize="small"] .prefs-preview {
+      font-size: var(--md-body-size, 13px);
+    }
+
+    html[data-fontsize="large"] .prefs-preview {
+      font-size: var(--md-body-size, 17px);
+    }
+
+    .prefs-preview-title {
+      font-size: 1.5em;
+      font-weight: 700;
+      line-height: 1.2;
+      padding-bottom: 8px;
+      margin-bottom: 12px;
+      border-bottom: 1px solid var(--ui-line);
+    }
+
+    .prefs-preview p {
+      margin: 0 0 10px;
+    }
+
+    .prefs-preview p:last-child {
+      margin-bottom: 0;
+    }
+
+    .prefs-preview-link {
+      color: var(--ui-orange);
+    }
+
+    .prefs-preview code {
+      font-family: var(--md-code-font, var(--ui-mono));
+      font-size: 0.88em;
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: var(--ui-cream);
+    }
+
+    .prefs-check {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .prefs-check input {
+      width: 18px;
+      height: 18px;
+      margin: 0;
+      accent-color: var(--ui-ink-card-accent);
+    }
+
+    /* The theme names in the day/night sentence. */
+    .prefs-theme-name-inline {
+      font-weight: 800;
+      color: var(--ui-ink-card-accent);
+      border-bottom: 3px solid var(--ui-ink-card-accent);
+      padding: 0 2px;
+    }
+
+    .prefs-theme-group {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
     }
 
     .prefs-theme-grid {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
       gap: 10px;
-      transition: opacity 0.15s;
-    }
-
-    .prefs-theme-grid.disabled {
-      opacity: 0.45;
-      pointer-events: none;
     }
 
     .prefs-theme-tile {
-      cursor: pointer;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 6px;
-      background: var(--bg);
+      position: relative;
       display: flex;
       flex-direction: column;
       gap: 6px;
-      transition: border-color 0.15s, transform 0.1s;
+      min-width: 0;
+      padding: 5px;
+      border: 2px solid transparent;
+      border-radius: 11px;
+      background: transparent;
+      color: var(--ui-ink);
       text-align: left;
-      font-family: inherit;
+      font: inherit;
+      cursor: pointer;
     }
 
-    .prefs-theme-tile:hover {
-      border-color: var(--accent);
+    .prefs-theme-tile:hover:not(.active) {
+      background: var(--ui-hover);
     }
 
     .prefs-theme-tile.active {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 2px var(--accent-light);
+      border-color: var(--ui-card-line);
+      background: var(--ui-yellow);
+      color: #17130d;
+      box-shadow: 3px 3px 0 var(--ui-card-shadow);
     }
 
     .prefs-theme-preview {
-      height: 56px;
-      border-radius: 5px;
-      position: relative;
-      overflow: hidden;
-      border: 1px solid rgba(0, 0, 0, 0.06);
+      height: 52px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 10px;
+      border-radius: 7px;
+      border: 1px solid rgba(23, 19, 13, 0.18);
     }
 
     .prefs-theme-preview-text {
-      position: absolute;
-      top: 8px;
-      left: 8px;
-      font-size: 10px;
-      font-weight: 600;
+      font: 700 17px var(--ui-sys);
     }
 
     .prefs-theme-preview-accent {
-      position: absolute;
-      bottom: 8px;
-      left: 8px;
-      width: 30%;
-      height: 5px;
+      width: 18px;
+      height: 6px;
       border-radius: 3px;
     }
 
     .prefs-theme-preview-code {
-      position: absolute;
-      bottom: 8px;
-      right: 8px;
-      width: 38%;
-      height: 16px;
-      border-radius: 3px;
-      font-size: 8px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      margin-left: auto;
+      padding: 2px 5px;
+      border-radius: 4px;
+      font: 500 11px var(--ui-mono);
     }
 
     .prefs-theme-name {
-      font-size: 12px;
-      font-weight: 500;
-      color: var(--text);
-      padding: 0 2px;
       display: flex;
       align-items: center;
-      justify-content: space-between;
+      gap: 6px;
+      padding: 0 2px 1px;
+      font-size: 13px;
+      font-weight: 800;
     }
 
+    .prefs-theme-name > span:first-child {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* The chosen tile is already filled: no separate tick. */
     .prefs-theme-check {
-      color: var(--accent);
-      font-size: 11px;
       display: none;
-    }
-
-    .prefs-theme-tile.active .prefs-theme-check {
-      display: inline;
-    }
-
-    .prefs-theme-tile {
-      position: relative;
     }
 
     .prefs-theme-actions {
       position: absolute;
-      top: 4px;
-      right: 4px;
-      display: flex;
-      gap: 4px;
-      opacity: 0;
-      transition: opacity 0.15s;
-      pointer-events: none;
+      top: 8px;
+      right: 8px;
+      display: none;
+      gap: 3px;
     }
 
-    .prefs-theme-tile:hover .prefs-theme-actions {
-      opacity: 1;
-      pointer-events: auto;
+    .prefs-theme-tile:hover .prefs-theme-actions,
+    .prefs-theme-tile:focus-within .prefs-theme-actions {
+      display: flex;
     }
 
     .prefs-theme-action {
-      width: 20px;
-      height: 20px;
-      border-radius: 50%;
-      background: rgba(0, 0, 0, 0.55);
-      color: white;
-      font-size: 11px;
-      line-height: 20px;
-      text-align: center;
-      cursor: pointer;
-      user-select: none;
+      width: 22px;
+      height: 22px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1.5px solid #17130d;
+      border-radius: 6px;
+      background: #fff6dc;
+      color: #17130d;
+      font-size: 12px;
+      line-height: 1;
     }
 
     .prefs-theme-action:hover {
-      background: var(--accent);
+      background: #ffc629;
     }
 
     .prefs-theme-action.delete:hover {
-      background: #dc2626;
+      background: #ffd9c2;
     }
 
-    /* Theme editor (full-screen inside the modal) */
+    .prefs-theme-actions-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      padding-top: 12px;
+      border-top: 2px dashed var(--ui-card-line);
+    }
+
+    .prefs-btn {
+      padding: 6px 12px;
+      border: 2px solid var(--ui-card-line);
+      border-radius: 8px;
+      background: var(--ui-cream);
+      color: var(--ui-ink);
+      font: 600 14px var(--ui-font);
+      cursor: pointer;
+    }
+
+    .prefs-btn--ink {
+      background: var(--ui-primary-bg);
+      color: var(--ui-primary-text);
+      font-weight: 700;
+    }
+
+    .prefs-error {
+      font-size: 13px;
+      font-weight: 700;
+      color: #b42318;
+    }
+
+    .prefs-footer {
+      margin: 0;
+      padding: 0 29px 16px 24px;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--ui-ink-soft);
+    }
+
+    @media (max-width: 860px) {
+      .prefs-cards,
+      .prefs-size-card {
+        grid-template-columns: 1fr;
+      }
+
+      .prefs-title {
+        font-size: 28px;
+      }
+    }
+
+    /* Theme editor: replaces the theme cards inside the Themes tab. */
+    .prefs-editor-card {
+      display: none;
+    }
+
+    .prefs-tab-panel.active.prefs-editor-mode .prefs-editor-card {
+      display: flex;
+    }
+
     .prefs-editor {
       display: none;
       flex-direction: column;
@@ -1103,216 +1457,6 @@
 
     .prefs-editor-save.destructive {
       background: #dc2626;
-    }
-
-    .prefs-checkbox-row {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-
-    .prefs-checkbox-row input[type="checkbox"] {
-      width: 16px;
-      height: 16px;
-      cursor: pointer;
-    }
-
-    .prefs-backdrop.visible .prefs-panel {
-      transform: translateY(0);
-    }
-
-    .prefs-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 14px 18px;
-      border-bottom: 1px solid var(--border);
-      background: var(--sidebar-bg);
-    }
-
-    .prefs-title {
-      font-size: 14px;
-      font-weight: 600;
-      color: var(--text);
-    }
-
-    .prefs-close {
-      background: none;
-      border: none;
-      cursor: pointer;
-      color: var(--text-muted);
-      font-size: 18px;
-      line-height: 1;
-      padding: 4px 8px;
-      border-radius: 6px;
-    }
-
-    .prefs-close:hover {
-      background: var(--sidebar-hover);
-      color: var(--text);
-    }
-
-    .prefs-body {
-      padding: 18px 20px;
-      display: flex;
-      flex-direction: column;
-      gap: 18px;
-      overflow-y: auto;
-      flex: 1;
-      min-height: 0;
-    }
-
-    .prefs-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-    }
-
-    .prefs-label {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-    }
-
-    .prefs-label-title {
-      font-size: 13px;
-      font-weight: 500;
-      color: var(--text);
-    }
-
-    .prefs-label-hint {
-      font-size: 11px;
-      color: var(--text-muted);
-    }
-
-    .prefs-segment {
-      display: inline-flex;
-      background: var(--code-bg);
-      border: 1px solid var(--border);
-      border-radius: 7px;
-      padding: 2px;
-      gap: 2px;
-    }
-
-    .prefs-segment button {
-      background: none;
-      border: none;
-      padding: 4px 10px;
-      font-size: 12px;
-      color: var(--text-muted);
-      border-radius: 5px;
-      cursor: pointer;
-      font-family: inherit;
-    }
-
-    .prefs-segment button.active {
-      background: var(--bg);
-      color: var(--text);
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
-    }
-
-    .prefs-segment button:hover:not(.active) {
-      color: var(--text);
-    }
-
-    .prefs-select {
-      background: var(--bg);
-      color: var(--text);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 4px 8px;
-      font-size: 12px;
-      font-family: inherit;
-      cursor: pointer;
-    }
-
-    .prefs-footer {
-      padding: 12px 18px;
-      border-top: 1px solid var(--border);
-      display: flex;
-      justify-content: flex-end;
-      background: var(--sidebar-bg);
-    }
-
-    .prefs-done {
-      background: var(--accent);
-      color: white;
-      border: none;
-      border-radius: 6px;
-      padding: 6px 16px;
-      font-size: 13px;
-      font-weight: 500;
-      cursor: pointer;
-      font-family: inherit;
-    }
-
-    .prefs-done:hover {
-      opacity: 0.9;
-    }
-
-    .prefs-disclosure {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      padding-top: 6px;
-      border-top: 1px dashed var(--border);
-    }
-
-    .prefs-disclosure-btn {
-      background: none;
-      border: none;
-      color: var(--accent);
-      cursor: pointer;
-      font-size: 12px;
-      font-family: inherit;
-      padding: 4px 0;
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-    }
-
-    .prefs-disclosure-btn:hover {
-      text-decoration: underline;
-    }
-
-    .prefs-reset {
-      background: none;
-      border: 1px solid var(--border);
-      color: var(--text-muted);
-      padding: 3px 10px;
-      border-radius: 5px;
-      font-size: 11px;
-      cursor: pointer;
-      font-family: inherit;
-    }
-
-    .prefs-reset:hover {
-      background: var(--sidebar-hover);
-      color: var(--text);
-    }
-
-    .prefs-advanced {
-      display: none;
-      flex-direction: column;
-      gap: 14px;
-      padding-top: 4px;
-    }
-
-    .prefs-advanced.visible {
-      display: flex;
-    }
-
-    .prefs-number {
-      background: var(--bg);
-      color: var(--text);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 4px 8px;
-      font-size: 12px;
-      font-family: inherit;
-      width: 70px;
     }
 
     /* --- Reading: the document is a Speakino card on the cream window --- */
@@ -3062,112 +3206,144 @@
         aria-labelledby="prefs-title"
       >
         <div class="prefs-header">
-          <span class="prefs-title" id="prefs-title" data-i18n="prefs.title">
-            Preferences
-          </span>
-          <button
-            class="prefs-close"
-            id="prefs-close"
-            data-i18n-title="prefs.close"
-          >
-            ×
+          <span class="prefs-mark" id="prefs-mark" aria-hidden="true"></span>
+          <h2 class="prefs-title" id="prefs-title" data-i18n="prefs.title">Préférences</h2>
+          <div class="prefs-tabs" role="tablist" data-i18n-aria-label="prefs.title">
+            <button type="button" class="prefs-tab active" data-tab="general" role="tab" aria-selected="true" tabindex="0" aria-controls="prefs-panel-general" data-i18n="prefs.tab.general">Général</button>
+            <button type="button" class="prefs-tab" data-tab="fonts" role="tab" aria-selected="false" tabindex="-1" aria-controls="prefs-panel-fonts" data-i18n="prefs.tab.fonts">Lecture</button>
+            <button type="button" class="prefs-tab" data-tab="appearance" role="tab" aria-selected="false" tabindex="-1" aria-controls="prefs-panel-appearance" data-i18n="prefs.tab.appearance">Thèmes</button>
+          </div>
+          <button type="button" class="prefs-close" id="prefs-close" data-i18n-title="prefs.close" data-i18n-aria-label="prefs.close">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
           </button>
         </div>
-        <div class="prefs-tabs" role="tablist">
-          <button
-            type="button"
-            class="prefs-tab active"
-            data-tab="general"
-            role="tab"
-            aria-selected="true"
-            tabindex="0"
-            data-i18n="prefs.tab.general"
-          >
-            Général
-          </button>
-          <button
-            type="button"
-            class="prefs-tab"
-            data-tab="fonts"
-            role="tab"
-            aria-selected="false"
-            tabindex="-1"
-            data-i18n="prefs.tab.fonts"
-          >
-            Polices
-          </button>
-          <button
-            type="button"
-            class="prefs-tab"
-            data-tab="appearance"
-            role="tab"
-            aria-selected="false"
-            tabindex="-1"
-            data-i18n="prefs.tab.appearance"
-          >
-            Apparence
-          </button>
-        </div>
-        <div class="prefs-body">
-          <div
-            class="prefs-tab-panel"
-            id="prefs-panel-appearance"
-            role="tabpanel"
-          >
-            <div class="prefs-editor-hide" style="display: contents">
-              <label class="prefs-checkbox-row">
-                <input type="checkbox" id="prefs-follow-system">
-                <span
-                  class="prefs-label-title"
-                  data-i18n="prefs.appearance.follow"
-                >
-                  Suivre le système
-                </span>
-              </label>
-              <div
-                class="prefs-label-hint"
-                id="prefs-follow-system-hint"
-                data-i18n="prefs.appearance.follow.hint"
-              >
-                Bascule automatiquement entre la variante claire et sombre du
-                thème selon l'apparence macOS.
-              </div>
-              <div class="prefs-theme-grid" id="prefs-theme-grid"></div>
-              <div class="prefs-disclosure">
-                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-                  <button
-                    type="button"
-                    class="prefs-disclosure-btn"
-                    id="prefs-new-theme"
-                    data-i18n="prefs.appearance.new"
-                  >
-                    Nouveau thème…
-                  </button>
-                  <button
-                    type="button"
-                    class="prefs-disclosure-btn"
-                    id="prefs-import-theme"
-                    data-i18n="prefs.appearance.import"
-                  >
-                    Importer un thème…
-                  </button>
-                  <button
-                    type="button"
-                    class="prefs-disclosure-btn"
-                    id="prefs-reveal-themes"
-                    data-i18n="prefs.appearance.reveal"
-                  >
-                    Révéler dans le Finder
-                  </button>
-                </div>
-                <span
-                  class="prefs-label-hint"
-                  id="prefs-import-error"
-                  style="color:#dc2626;display:none"
-                ></span>
-              </div>
-            </div>
 
+        <div class="prefs-body">
+          <!-- Général -->
+          <div class="prefs-tab-panel active" id="prefs-panel-general" role="tabpanel">
+            <div class="prefs-cards">
+              <section class="prefs-card prefs-card--wide" aria-labelledby="prefs-windows-label">
+                <h3 class="prefs-eyebrow" id="prefs-windows-label" data-i18n="prefs.card.windows">Fenêtres</h3>
+                <p class="prefs-sentence">
+                  <span data-i18n="prefs.launch.before">Au lancement, ouvrir</span>
+                  <select class="prefs-inline" id="prefs-launch" data-i18n-aria-label="prefs.general.launch.title">
+                    <option value="home" data-i18n="prefs.launch.home">l'accueil</option>
+                    <option value="last-folder" data-i18n="prefs.launch.lastFolder">le dernier dossier</option>
+                  </select><span data-i18n="prefs.sentence.end">.</span>
+                </p>
+                <p class="prefs-sentence">
+                  <span data-i18n="prefs.finderOpen.before">Un document ouvert depuis le Finder s'affiche dans</span>
+                  <select class="prefs-inline" id="prefs-finder-open" data-i18n-aria-label="prefs.general.finderOpen.title">
+                    <option value="new-window" data-i18n="prefs.finderOpen.newWindow">une nouvelle fenêtre</option>
+                    <option value="reuse" data-i18n="prefs.finderOpen.reuse">la fenêtre actuelle</option>
+                  </select><span data-i18n="prefs.sentence.end">.</span>
+                </p>
+              </section>
+
+              <section class="prefs-card prefs-card--ink" aria-labelledby="prefs-outline-label">
+                <h3 class="prefs-eyebrow" id="prefs-outline-label" data-i18n="prefs.general.outline.title">Plan de la page</h3>
+                <div class="prefs-segment" id="prefs-outline" role="radiogroup" aria-labelledby="prefs-outline-label">
+                  <button type="button" role="radio" data-value="auto" data-i18n="prefs.outline.auto">Auto</button>
+                  <button type="button" role="radio" data-value="always" data-i18n="prefs.outline.always">Toujours</button>
+                  <button type="button" role="radio" data-value="hidden" data-i18n="prefs.outline.hidden">Caché</button>
+                </div>
+                <p class="prefs-hint" id="prefs-outline-hint"></p>
+              </section>
+
+              <section class="prefs-card" aria-labelledby="prefs-language-label">
+                <h3 class="prefs-eyebrow" id="prefs-language-label" data-i18n="prefs.general.language.title">Langue</h3>
+                <p class="prefs-sentence">
+                  <span data-i18n="prefs.language.before">L'interface est en</span>
+                  <select class="prefs-inline" id="prefs-language" aria-labelledby="prefs-language-label">
+                    <option value="fr">français</option>
+                    <option value="en">English</option>
+                  </select><span data-i18n="prefs.sentence.end">.</span>
+                </p>
+              </section>
+            </div>
+          </div>
+
+          <!-- Lecture -->
+          <div class="prefs-tab-panel" id="prefs-panel-fonts" role="tabpanel">
+            <div class="prefs-cards">
+              <section class="prefs-card prefs-card--cream prefs-card--wide prefs-size-card" aria-labelledby="prefs-size-label">
+                <div class="prefs-size-col">
+                  <h3 class="prefs-eyebrow" id="prefs-size-label" data-i18n="prefs.fonts.size.title">Taille du texte</h3>
+                  <div class="prefs-sizes" id="prefs-fontsize" role="radiogroup" aria-labelledby="prefs-size-label">
+                    <button type="button" role="radio" data-value="small"><span class="prefs-size-glyph" aria-hidden="true">Aa</span><span data-i18n="prefs.fonts.size.small">Petit</span></button>
+                    <button type="button" role="radio" data-value="medium"><span class="prefs-size-glyph" aria-hidden="true">Aa</span><span data-i18n="prefs.fonts.size.medium">Moyen</span></button>
+                    <button type="button" role="radio" data-value="large"><span class="prefs-size-glyph" aria-hidden="true">Aa</span><span data-i18n="prefs.fonts.size.large">Grand</span></button>
+                  </div>
+                </div>
+                <div class="prefs-preview" aria-hidden="true">
+                  <div class="prefs-preview-title" data-i18n="prefs.preview.title">Objectifs</div>
+                  <p><span data-i18n="prefs.preview.p1">Retrouver vite comment un outil a été installé, et</span> <span class="prefs-preview-link" data-i18n="prefs.preview.link">pourquoi</span>.</p>
+                  <p><span data-i18n="prefs.preview.p2">Lancez</span> <code>brew bundle</code> <span data-i18n="prefs.preview.p3">sur la nouvelle machine.</span></p>
+                </div>
+              </section>
+
+              <section class="prefs-card prefs-card--wide" aria-labelledby="prefs-typo-label">
+                <div class="prefs-card-head">
+                  <h3 class="prefs-eyebrow" id="prefs-typo-label" data-i18n="prefs.fonts.typography">Typographie</h3>
+                  <button type="button" class="prefs-btn" id="prefs-advanced-reset" data-i18n="prefs.fonts.advanced.reset" data-i18n-title="prefs.fonts.advanced.reset.title">Réinitialiser</button>
+                </div>
+                <p class="prefs-sentence">
+                  <span data-i18n="prefs.fonts.body.before">Le texte est en</span>
+                  <select class="prefs-inline" id="prefs-body-font" data-i18n-aria-label="prefs.fonts.body.title">
+                    <option value="" data-i18n="prefs.fonts.system.default">la police du système</option>
+                  </select><span data-i18n="prefs.fonts.weight.before">, en graisse</span>
+                  <select class="prefs-inline" id="prefs-font-weight" data-i18n-aria-label="prefs.fonts.weight.title">
+                    <option value="" data-i18n="prefs.fonts.weight.default">par défaut</option>
+                    <option value="300" data-i18n="prefs.fonts.weight.300">légère (300)</option>
+                    <option value="400" data-i18n="prefs.fonts.weight.400">normale (400)</option>
+                    <option value="500" data-i18n="prefs.fonts.weight.500">moyenne (500)</option>
+                    <option value="600" data-i18n="prefs.fonts.weight.600">demi-grasse (600)</option>
+                    <option value="700" data-i18n="prefs.fonts.weight.700">grasse (700)</option>
+                  </select><span data-i18n="prefs.sentence.end">.</span>
+                  <span data-i18n="prefs.fonts.code.before">Le code est en</span>
+                  <select class="prefs-inline" id="prefs-code-font" data-i18n-aria-label="prefs.fonts.code.title">
+                    <option value="" data-i18n="prefs.fonts.system.default">la police du système</option>
+                  </select><span data-i18n="prefs.sentence.end">.</span>
+                </p>
+                <p class="prefs-sentence">
+                  <label for="prefs-custom-size" data-i18n="prefs.fonts.exact.before">Taille exacte :</label>
+                  <input type="number" class="prefs-inline prefs-number" id="prefs-custom-size" min="10" max="32" step="1" data-i18n-placeholder="prefs.fonts.placeholder.auto" placeholder="auto">
+                  <span data-i18n="prefs.fonts.exact.after">px, à la place de la taille ci-dessus.</span>
+                </p>
+              </section>
+            </div>
+          </div>
+
+          <!-- Thèmes -->
+          <div class="prefs-tab-panel" id="prefs-panel-appearance" role="tabpanel">
+            <div class="prefs-editor-hide prefs-cards">
+              <section class="prefs-card prefs-card--ink prefs-card--wide" aria-labelledby="prefs-daynight-label">
+                <h3 class="prefs-eyebrow" id="prefs-daynight-label" data-i18n="prefs.themes.card">Jour et nuit</h3>
+                <label class="prefs-check">
+                  <input type="checkbox" id="prefs-follow-system">
+                  <span data-i18n="prefs.appearance.follow">Suivre l'apparence de macOS</span>
+                </label>
+                <p class="prefs-sentence" id="prefs-theme-sentence" aria-live="polite"></p>
+              </section>
+
+              <section class="prefs-card prefs-card--wide" aria-labelledby="prefs-grid-light-label">
+                <div class="prefs-theme-group">
+                  <h3 class="prefs-eyebrow" id="prefs-grid-light-label"></h3>
+                  <div class="prefs-theme-grid" id="prefs-theme-grid-light" role="group" aria-labelledby="prefs-grid-light-label"></div>
+                </div>
+                <div class="prefs-theme-group">
+                  <h3 class="prefs-eyebrow" id="prefs-grid-dark-label"></h3>
+                  <div class="prefs-theme-grid" id="prefs-theme-grid-dark" role="group" aria-labelledby="prefs-grid-dark-label"></div>
+                </div>
+                <div class="prefs-theme-actions-row">
+                  <button type="button" class="prefs-btn prefs-btn--ink" id="prefs-new-theme" data-i18n="prefs.appearance.new">Nouveau thème</button>
+                  <button type="button" class="prefs-btn" id="prefs-import-theme" data-i18n="prefs.appearance.import">Importer…</button>
+                  <button type="button" class="prefs-btn" id="prefs-reveal-themes" data-i18n="prefs.appearance.reveal">Ouvrir le dossier</button>
+                  <span class="prefs-error" id="prefs-import-error" role="alert" style="display:none"></span>
+                </div>
+              </section>
+            </div>
+            <section class="prefs-card prefs-editor-card">
             <div class="prefs-editor" id="prefs-editor">
               <div class="prefs-editor-header">
                 <button
@@ -3232,225 +3408,11 @@
                 </button>
               </div>
             </div>
-          </div>
-
-          <div
-            class="prefs-tab-panel"
-            id="prefs-panel-fonts"
-            role="tabpanel"
-          >
-            <div class="prefs-row">
-              <div class="prefs-label">
-                <span class="prefs-label-title" data-i18n="prefs.fonts.size.title">
-                  Taille
-                </span>
-                <span class="prefs-label-hint" data-i18n="prefs.fonts.size.hint">
-                  Préréglage rapide pour le texte du document
-                </span>
-              </div>
-              <select class="prefs-select" id="prefs-fontsize">
-                <option value="small" data-i18n="prefs.fonts.size.small">
-                  Petit
-                </option>
-                <option value="medium" data-i18n="prefs.fonts.size.medium">
-                  Moyen
-                </option>
-                <option value="large" data-i18n="prefs.fonts.size.large">
-                  Grand
-                </option>
-              </select>
-            </div>
-            <div class="prefs-disclosure">
-              <button
-                type="button"
-                class="prefs-disclosure-btn"
-                id="prefs-advanced-toggle"
-                aria-expanded="false"
-                aria-controls="prefs-advanced"
-              >
-                <span id="prefs-advanced-caret">▸</span>
-                <span data-i18n="prefs.fonts.advanced">Typographie avancée</span>
-              </button>
-              <button
-                type="button"
-                class="prefs-reset"
-                id="prefs-advanced-reset"
-                data-i18n="prefs.fonts.advanced.reset"
-                data-i18n-title="prefs.fonts.advanced.reset.title"
-              >
-                Réinitialiser
-              </button>
-            </div>
-            <div class="prefs-advanced" id="prefs-advanced">
-              <div class="prefs-row">
-                <div class="prefs-label">
-                  <span class="prefs-label-title" data-i18n="prefs.fonts.body.title">
-                    Police du corps
-                  </span>
-                  <span class="prefs-label-hint" data-i18n="prefs.fonts.body.hint">
-                    Famille pour la prose
-                  </span>
-                </div>
-                <select class="prefs-select" id="prefs-body-font">
-                  <option value="" data-i18n="prefs.fonts.system.default">
-                    Par défaut système
-                  </option>
-                </select>
-              </div>
-              <div class="prefs-row">
-                <div class="prefs-label">
-                  <span class="prefs-label-title" data-i18n="prefs.fonts.code.title">
-                    Police du code
-                  </span>
-                  <span
-                    class="prefs-label-hint"
-                    data-i18n="prefs.fonts.code.hint"
-                  >
-                    Utilisée dans le code et les blocs préformatés
-                  </span>
-                </div>
-                <select class="prefs-select" id="prefs-code-font">
-                  <option value="" data-i18n="prefs.fonts.system.default">
-                    Par défaut système
-                  </option>
-                </select>
-              </div>
-              <div class="prefs-row">
-                <div class="prefs-label">
-                  <span class="prefs-label-title" data-i18n="prefs.fonts.weight.title">
-                    Graisse
-                  </span>
-                  <span class="prefs-label-hint" data-i18n="prefs.fonts.weight.hint">
-                    Épaisseur du texte
-                  </span>
-                </div>
-                <select class="prefs-select" id="prefs-font-weight">
-                  <option value="" data-i18n="prefs.fonts.weight.default">
-                    Défaut
-                  </option>
-                  <option value="300" data-i18n="prefs.fonts.weight.300">
-                    Light (300)
-                  </option>
-                  <option value="400" data-i18n="prefs.fonts.weight.400">
-                    Regular (400)
-                  </option>
-                  <option value="500" data-i18n="prefs.fonts.weight.500">
-                    Medium (500)
-                  </option>
-                  <option value="600" data-i18n="prefs.fonts.weight.600">
-                    Semibold (600)
-                  </option>
-                  <option value="700" data-i18n="prefs.fonts.weight.700">
-                    Bold (700)
-                  </option>
-                </select>
-              </div>
-              <div class="prefs-row">
-                <div class="prefs-label">
-                  <span class="prefs-label-title" data-i18n="prefs.fonts.size.exact.title">
-                    Taille exacte
-                  </span>
-                  <span class="prefs-label-hint" data-i18n="prefs.fonts.size.exact.hint">
-                    Surcharge le préréglage (10–32 px)
-                  </span>
-                </div>
-                <input
-                  type="number"
-                  class="prefs-number"
-                  id="prefs-custom-size"
-                  min="10"
-                  max="32"
-                  step="1"
-                  data-i18n-placeholder="prefs.fonts.placeholder.auto"
-                  placeholder="auto"
-                >
-              </div>
-            </div>
-          </div>
-
-          <div
-            class="prefs-tab-panel active"
-            id="prefs-panel-general"
-            role="tabpanel"
-          >
-            <div class="prefs-row">
-              <div class="prefs-label">
-                <span class="prefs-label-title" data-i18n="prefs.general.language.title">
-                  Langue
-                </span>
-                <span class="prefs-label-hint" data-i18n="prefs.general.language.hint">
-                  Langue de l'interface
-                </span>
-              </div>
-              <select class="prefs-select" id="prefs-language">
-                <option value="fr">Français</option>
-                <option value="en">English</option>
-              </select>
-            </div>
-            <div class="prefs-row">
-              <div class="prefs-label">
-                <span class="prefs-label-title" data-i18n="prefs.general.outline.title">
-                  Panneau de plan
-                </span>
-                <span class="prefs-label-hint" data-i18n="prefs.general.outline.hint">
-                  Table des matières à droite
-                </span>
-              </div>
-              <div class="prefs-segment" id="prefs-outline" role="radiogroup">
-                <button type="button" data-value="auto" data-i18n="prefs.outline.auto">
-                  Auto
-                </button>
-                <button type="button" data-value="always" data-i18n="prefs.outline.always">
-                  Toujours
-                </button>
-                <button type="button" data-value="hidden" data-i18n="prefs.outline.hidden">
-                  Caché
-                </button>
-              </div>
-            </div>
-            <div class="prefs-row">
-              <div class="prefs-label">
-                <span class="prefs-label-title" data-i18n="prefs.general.finderOpen.title">
-                  Ouverture depuis le Finder
-                </span>
-                <span class="prefs-label-hint" data-i18n="prefs.general.finderOpen.hint">
-                  Quand un document est déjà ouvert
-                </span>
-              </div>
-              <div class="prefs-segment" id="prefs-finder-open" role="radiogroup">
-                <button type="button" data-value="new-window" data-i18n="prefs.finderOpen.newWindow">
-                  Nouvelle fenêtre
-                </button>
-                <button type="button" data-value="reuse" data-i18n="prefs.finderOpen.reuse">
-                  Fenêtre actuelle
-                </button>
-              </div>
-            </div>
-            <div class="prefs-row">
-              <div class="prefs-label">
-                <span class="prefs-label-title" data-i18n="prefs.general.launch.title">
-                  Au lancement
-                </span>
-                <span class="prefs-label-hint" data-i18n="prefs.general.launch.hint">
-                  Quand rien d'autre n'est ouvert
-                </span>
-              </div>
-              <div class="prefs-segment" id="prefs-launch" role="radiogroup">
-                <button type="button" data-value="home" data-i18n="prefs.launch.home">
-                  Accueil
-                </button>
-                <button type="button" data-value="last-folder" data-i18n="prefs.launch.lastFolder">
-                  Dernier dossier
-                </button>
-              </div>
-            </div>
+            </section>
           </div>
         </div>
-        <div class="prefs-footer">
-          <button class="prefs-done" id="prefs-done" data-i18n="prefs.done">
-            Done
-          </button>
-        </div>
+
+        <p class="prefs-footer" data-i18n="prefs.footer">Chaque réglage s'applique tout de suite.</p>
       </div>
     </div>
 
