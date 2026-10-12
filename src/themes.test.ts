@@ -522,6 +522,17 @@ describe("day and night themes", () => {
     expect(resolveDisplayedThemeId(catalog, "sepia", true, slots, true)).toBe("nord");
   });
 
+  it("moves a theme out of a slot once it changes appearance", () => {
+    // A custom light theme in the day slot is edited into a dark one.
+    const edited = buildThemeCatalog([
+      { ...BUILTIN_THEMES.dark, id: "mine", name: "Mine", pair: "light" },
+    ]);
+    expect(resolveFollowThemes(edited, "light", "mine", "mine")).toEqual({
+      day: "light",
+      night: "mine",
+    });
+  });
+
   it("falls back to the fixed theme's pair when a slot no longer fits", () => {
     const slots = { day: "github", night: "light" };
     expect(resolveDisplayedThemeId(catalog, "light", true, slots, true)).toBe("dark");

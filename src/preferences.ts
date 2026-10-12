@@ -179,6 +179,7 @@ export function setSegmentActive(group: HTMLElement, value: string): void {
     btn.classList.toggle("active", on);
     if (btn.getAttribute("role") === "radio") {
       btn.setAttribute("aria-checked", String(on));
+      btn.tabIndex = on ? 0 : -1;
     }
   }
 }

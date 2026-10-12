@@ -170,6 +170,10 @@
       position: relative;
     }
 
+    html.is-fullscreen #titlebar {
+      padding-left: 16px;
+    }
+
     #titlebar-nav {
       display: flex;
       align-items: center;
@@ -895,6 +899,12 @@
       text-transform: uppercase;
     }
 
+    /* The focus ring is ink in light mode and yellow in dark: the same colour
+       as this card, so it takes the card's accent instead. */
+    .prefs-card--ink :focus-visible {
+      outline-color: var(--ui-ink-card-accent);
+    }
+
     .prefs-card--ink .prefs-eyebrow {
       color: var(--ui-ink-card-accent);
     }
@@ -1113,8 +1123,14 @@
       gap: 10px;
     }
 
+    .prefs-theme-cell {
+      position: relative;
+      min-width: 0;
+    }
+
     .prefs-theme-tile {
       position: relative;
+      width: 100%;
       display: flex;
       flex-direction: column;
       gap: 6px;
@@ -1182,27 +1198,27 @@
       white-space: nowrap;
     }
 
-    /* The chosen tile is already filled: no separate tick. */
-    .prefs-theme-check {
-      display: none;
-    }
-
+    /* Shown on hover, and whenever one of them has the keyboard focus (they
+       stay in the tab order, so they cannot be display: none). */
     .prefs-theme-actions {
       position: absolute;
       top: 8px;
       right: 8px;
-      display: none;
+      display: flex;
       gap: 3px;
+      opacity: 0;
     }
 
-    .prefs-theme-tile:hover .prefs-theme-actions,
-    .prefs-theme-tile:focus-within .prefs-theme-actions {
-      display: flex;
+    .prefs-theme-cell:hover .prefs-theme-actions,
+    .prefs-theme-actions:focus-within {
+      opacity: 1;
     }
 
     .prefs-theme-action {
       width: 22px;
       height: 22px;
+      padding: 0;
+      cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -1247,10 +1263,15 @@
       font-weight: 700;
     }
 
+    /* Speakino's alert: a pale orange chip, readable on either card. */
     .prefs-error {
+      padding: 3px 8px;
+      border: 2px solid #17130d;
+      border-radius: 8px;
+      background: #ffd9c2;
+      color: #17130d;
       font-size: 13px;
       font-weight: 700;
-      color: #b42318;
     }
 
     .prefs-footer {
@@ -2090,7 +2111,8 @@
         bottom: 0;
         left: 0;
         z-index: 60;
-        padding-top: 44px;
+        /* Clears the 52px title bar, as the docked sidebar does. */
+        padding-top: 50px;
         border-right: 2px solid var(--ui-card-line);
         box-shadow: 8px 0 28px rgba(23, 19, 13, 0.18);
         transform: translateX(-105%);
@@ -3323,7 +3345,7 @@
                   <input type="checkbox" id="prefs-follow-system">
                   <span data-i18n="prefs.appearance.follow">Suivre l'apparence de macOS</span>
                 </label>
-                <p class="prefs-sentence" id="prefs-theme-sentence" aria-live="polite"></p>
+                <p class="prefs-sentence" id="prefs-theme-sentence"></p>
               </section>
 
               <section class="prefs-card prefs-card--wide" aria-labelledby="prefs-grid-light-label">

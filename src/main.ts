@@ -157,18 +157,44 @@ function activeThemeId(): ThemeId {
 }
 
 /** Choose a theme: it fills its light or dark slot, and is shown unless following macOS. */
+/**
+ * Bring the fixed theme and the light/dark slots back in line with the
+ * catalog after a theme was deleted, imported, renamed or switched between
+ * light and dark: a slot always holds an existing theme of its appearance.
+ */
+function reconcileThemeChoices(renamed?: { from: ThemeId; to: ThemeId }): void {
+  const rename = (id: ThemeId) =>
+    renamed && id === renamed.from ? renamed.to : id;
+  currentThemeId = rename(currentThemeId);
+  if (!(currentThemeId in themeCatalog)) currentThemeId = "light";
+  followThemes = resolveFollowThemes(
+    themeCatalog,
+    currentThemeId,
+    rename(followThemes.day),
+    rename(followThemes.night)
+  );
+}
+
+async function saveThemeChoices(): Promise<void> {
+  await savePrefs({
+    [THEME_KEY]: currentThemeId,
+    [DAY_THEME_KEY]: followThemes.day,
+    [NIGHT_THEME_KEY]: followThemes.night,
+  });
+}
+
+/** Choose a theme: it fills its light or dark slot, and is shown unless following macOS. */
 async function selectTheme(id: ThemeId): Promise<void> {
   const theme = themeCatalog[id];
   if (!theme) return;
-  const slotKey = theme.isDark ? NIGHT_THEME_KEY : DAY_THEME_KEY;
+  reconcileThemeChoices();
   followThemes = theme.isDark
     ? { ...followThemes, night: id }
     : { ...followThemes, day: id };
   if (!followSystem) currentThemeId = id;
   applyActiveTheme();
   refreshThemeGridSelection();
-  await savePref(slotKey, id);
-  if (!followSystem) await savePref(THEME_KEY, id);
+  await saveThemeChoices();
 }
 
 function applyActiveTheme(): void {
@@ -228,12 +254,23 @@ async function initTheme(): Promise<void> {
     savedAppearance
   );
   followSystem = savedFollow === true;
+  const savedDay = await store.get(DAY_THEME_KEY);
+  const savedNight = await store.get(NIGHT_THEME_KEY);
   followThemes = resolveFollowThemes(
     themeCatalog,
     currentThemeId,
-    await store.get(DAY_THEME_KEY),
-    await store.get(NIGHT_THEME_KEY)
+    savedDay,
+    savedNight
   );
+  // Settings from before the day/night slots (or a slot whose theme is gone):
+  // write the derived pair now, so it no longer depends on the fixed theme,
+  // which changes as soon as the reader turns "follow macOS" off.
+  if (savedDay !== followThemes.day || savedNight !== followThemes.night) {
+    await savePrefs({
+      [DAY_THEME_KEY]: followThemes.day,
+      [NIGHT_THEME_KEY]: followThemes.night,
+    });
+  }
   currentBodyFont = resolveInitialFontFamily(await store.get(BODY_FONT_KEY));
   currentCodeFont = resolveInitialFontFamily(await store.get(CODE_FONT_KEY));
   currentFontWeight = resolveInitialFontWeight(
@@ -296,6 +333,7 @@ async function exportPdf(): Promise<void> {
 
 async function toggleTheme(): Promise<void> {
   // Swap to the other slot: the reader's light theme for their dark one.
+  reconcileThemeChoices();
   const activeId = activeThemeId();
   const newId = themeCatalog[activeId]?.isDark
     ? followThemes.day
@@ -303,10 +341,7 @@ async function toggleTheme(): Promise<void> {
   currentThemeId = newId;
   followSystem = false;
   applyActiveTheme();
-  const store = await load(STORE_FILE);
-  await store.set(THEME_KEY, newId);
-  await store.set(FOLLOW_SYSTEM_KEY, false);
-  await store.save();
+  await savePrefs({ [THEME_KEY]: newId, [FOLLOW_SYSTEM_KEY]: false });
   syncPrefsUI();
   refreshThemeGridSelection();
 }
@@ -562,6 +597,21 @@ const searchOptWholeWord = document.getElementById(
 ) as HTMLInputElement;
 
 const appWindow = getCurrentWindow();
+
+// In full screen the traffic lights are gone: the title bar can drop the room
+// it keeps for them (WKWebView never reports env(titlebar-area-x)).
+async function syncFullscreen(): Promise<void> {
+  try {
+    document.documentElement.classList.toggle(
+      "is-fullscreen",
+      await appWindow.isFullscreen()
+    );
+  } catch {
+    // Not in Tauri (tests) or not allowed: keep the room for the lights.
+  }
+}
+void appWindow.onResized(() => void syncFullscreen()).catch(() => {});
+void syncFullscreen();
 
 // Keeps the native window title in sync with what the window shows. The title is
 // hidden in our custom title bar; it exists so this window is identifiable in the
@@ -902,7 +952,6 @@ const prefsRevealThemes = document.getElementById(
 const prefsPanelAppearance = document.getElementById(
   "prefs-panel-appearance"
 ) as HTMLDivElement;
-const prefsEditor = document.getElementById("prefs-editor") as HTMLDivElement;
 const prefsEditorName = document.getElementById(
   "prefs-editor-name"
 ) as HTMLInputElement;
@@ -1005,7 +1054,13 @@ function fitInlineSelect(select: HTMLSelectElement): void {
   const style = getComputedStyle(select);
   selectProbe.style.font = style.font;
   selectProbe.style.fontWeight = style.fontWeight;
-  selectProbe.textContent = select.selectedOptions[0]?.textContent ?? "";
+  const shown = select.selectedOptions[0]?.textContent;
+  // No matching option (fonts not listed yet): keep the natural width.
+  if (!shown) {
+    select.style.width = "";
+    return;
+  }
+  selectProbe.textContent = shown;
   const pad =
     parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) + 2;
   select.style.width = `${Math.ceil(selectProbe.offsetWidth + pad)}px`;
@@ -1091,7 +1146,7 @@ function buildThemeGrid(): void {
   }
 }
 
-function buildThemeTile(theme: Theme): HTMLButtonElement {
+function buildThemeTile(theme: Theme): HTMLDivElement {
   const tile = document.createElement("button");
   tile.type = "button";
   tile.className = "prefs-theme-tile";
@@ -1124,49 +1179,47 @@ function buildThemeTile(theme: Theme): HTMLButtonElement {
   nameRow.className = "prefs-theme-name";
   const nameSpan = document.createElement("span");
   nameSpan.textContent = theme.name;
-  const check = document.createElement("span");
-  check.className = "prefs-theme-check";
-  check.textContent = "✓";
   nameRow.appendChild(nameSpan);
-  nameRow.appendChild(check);
 
   tile.appendChild(preview);
   tile.appendChild(nameRow);
 
-  const actions = document.createElement("span");
+  tile.addEventListener("click", () => selectTheme(theme.id));
+
+  // Edit, duplicate and delete sit beside the tile, not inside it: a button
+  // cannot hold buttons, and each must be reachable from the keyboard.
+  const cell = document.createElement("div");
+  cell.className = "prefs-theme-cell";
+  const actions = document.createElement("div");
   actions.className = "prefs-theme-actions";
+  const action = (
+    kind: string,
+    glyph: string,
+    labelKey: string,
+    run: () => void
+  ): void => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = `prefs-theme-action ${kind}`;
+    b.textContent = glyph;
+    const label = `${t(labelKey)} — ${theme.name}`;
+    b.title = label;
+    b.setAttribute("aria-label", label);
+    b.addEventListener("click", run);
+    actions.append(b);
+  };
 
   if (theme.custom) {
     tile.classList.add("custom");
-
-    const edit = document.createElement("span");
-    edit.className = "prefs-theme-action edit";
-    edit.textContent = "✎";
-    edit.title = t("prefs.appearance.edit");
-    edit.addEventListener("click", (e) => {
-      e.stopPropagation();
-      openEditor(theme, { editing: true });
-    });
-    actions.appendChild(edit);
+    action("edit", "✎", "prefs.appearance.edit", () =>
+      openEditor(theme, { editing: true })
+    );
   }
-
-  const dup = document.createElement("span");
-  dup.className = "prefs-theme-action duplicate";
-  dup.textContent = "⧉";
-  dup.title = t("prefs.appearance.duplicate");
-  dup.addEventListener("click", (e) => {
-    e.stopPropagation();
-    openEditor({ ...theme, custom: true }, { duplicateFrom: theme.id });
-  });
-  actions.appendChild(dup);
-
+  action("duplicate", "⧉", "prefs.appearance.duplicate", () =>
+    openEditor({ ...theme, custom: true }, { duplicateFrom: theme.id })
+  );
   if (theme.custom) {
-    const del = document.createElement("span");
-    del.className = "prefs-theme-action delete";
-    del.textContent = "×";
-    del.title = t("prefs.appearance.delete");
-    del.addEventListener("click", async (e) => {
-      e.stopPropagation();
+    action("delete", "×", "prefs.appearance.delete", async () => {
       const ok = await confirmDialog({
         title: t("prefs.appearance.delete.confirm.title"),
         message: t("prefs.appearance.delete.confirm"),
@@ -1177,31 +1230,17 @@ function buildThemeTile(theme: Theme): HTMLButtonElement {
       if (!ok) return;
       await deleteCustomTheme(theme.id);
     });
-    actions.appendChild(del);
   }
 
-  tile.appendChild(actions);
-
-  tile.addEventListener("click", () => selectTheme(theme.id));
-
-  return tile;
+  cell.append(tile, actions);
+  return cell;
 }
 
 async function deleteCustomTheme(id: ThemeId): Promise<void> {
   customThemes = customThemes.filter((c) => c.id !== id);
   themeCatalog = buildThemeCatalog(customThemes);
-  if (!(currentThemeId in themeCatalog)) {
-    currentThemeId = "light";
-    await savePref(THEME_KEY, currentThemeId);
-  }
-  followThemes = resolveFollowThemes(
-    themeCatalog,
-    currentThemeId,
-    followThemes.day,
-    followThemes.night
-  );
-  await savePref(DAY_THEME_KEY, followThemes.day);
-  await savePref(NIGHT_THEME_KEY, followThemes.night);
+  reconcileThemeChoices();
+  await saveThemeChoices();
   applyActiveTheme();
   buildThemeGrid();
   refreshThemeGridSelection();
@@ -1481,6 +1520,11 @@ async function saveEditorTheme(): Promise<void> {
   }
 
   await persistCustomTheme(theme);
+  const originalId = prefsEditorId.dataset.originalId;
+  if (editorContext.editing && originalId && originalId !== id) {
+    // A renamed theme keeps its place as the fixed theme and in its slot.
+    reconcileThemeChoices({ from: originalId, to: id });
+  }
   buildThemeGrid();
   await selectTheme(theme.id);
   editorPreviewSnapshot = null; // committed; no rollback
@@ -1557,14 +1601,59 @@ function closePrefs(): void {
 }
 
 async function savePref<T>(key: string, value: T): Promise<void> {
-  const store = await load(STORE_FILE);
-  await store.set(key, value);
-  await store.save();
+  await savePrefs({ [key]: value });
+}
+
+// Writes run one after another, in the order they were asked for: two quick
+// changes can never land in the store the other way round.
+let prefsWrites: Promise<void> = Promise.resolve();
+
+/** Several settings that belong together, written in one save. */
+function savePrefs(entries: Record<string, unknown>): Promise<void> {
+  const write = prefsWrites.then(async () => {
+    const store = await load(STORE_FILE);
+    for (const [key, value] of Object.entries(entries)) {
+      await store.set(key, value);
+    }
+    await store.save();
+  });
+  prefsWrites = write.catch((e) => console.warn("Failed to save settings:", e));
+  return write;
+}
+
+/** Radio groups of buttons: one Tab stop, arrow keys move the choice. */
+function wireRadioGroup(group: HTMLElement): void {
+  group.addEventListener("keydown", (e) => {
+    const step =
+      e.key === "ArrowRight" || e.key === "ArrowDown"
+        ? 1
+        : e.key === "ArrowLeft" || e.key === "ArrowUp"
+          ? -1
+          : 0;
+    if (!step) return;
+    const radios = Array.from(
+      group.querySelectorAll<HTMLButtonElement>('[role="radio"]')
+    );
+    const at = radios.indexOf(document.activeElement as HTMLButtonElement);
+    if (at < 0) return;
+    e.preventDefault();
+    const next = radios[(at + step + radios.length) % radios.length];
+    next.focus();
+    next.click();
+  });
 }
 
 function initPreferences(): void {
+  wireRadioGroup(prefsOutline);
+  wireRadioGroup(prefsFontSize);
   prefsBackdrop.addEventListener("change", (e) => {
-    if (e.target instanceof HTMLSelectElement) fitInlineSelect(e.target);
+    const target = e.target;
+    if (
+      target instanceof HTMLSelectElement &&
+      target.classList.contains("prefs-inline")
+    ) {
+      fitInlineSelect(target);
+    }
   });
   document.getElementById("prefs-mark")!.innerHTML = appMark(46);
   prefsClose.addEventListener("click", closePrefs);
@@ -1624,8 +1713,8 @@ function initPreferences(): void {
     followSystem = prefsFollowSystem.checked;
     applyActiveTheme();
     refreshThemeGridSelection();
-    await savePref(FOLLOW_SYSTEM_KEY, followSystem);
-    if (!followSystem) await savePref(THEME_KEY, currentThemeId);
+    await savePrefs({ [FOLLOW_SYSTEM_KEY]: followSystem });
+    await saveThemeChoices();
   });
 
   prefsLanguage.addEventListener("change", async () => {
@@ -1637,7 +1726,9 @@ function initPreferences(): void {
     // Home, folder view, sidebar, breadcrumb and a few labels inside the
     // document are built in JS: rebuild them in the new language.
     relabelScreen();
-    // The outline hint and the theme sentence are written in JS too.
+    // The outline hint, the theme sentence and the theme actions' labels are
+    // written in JS too.
+    buildThemeGrid();
     syncPrefsUI();
     await savePref(LOCALE_KEY, value);
   });
