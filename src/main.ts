@@ -185,26 +185,40 @@ function themeChoices(): ThemeChoices {
   };
 }
 
-/**
- * Write the theme settings that changed since `before`, with `extra`, in one
- * save. Only what changed: another window may have chosen the other slot
- * meanwhile, and rewriting it from this window's memory would undo that.
- */
-// Set when the slots derived at startup could not be written: the next save
-// writes all three theme settings instead of only the changed ones.
-let themeChoicesUnsaved = false;
+// Theme settings whose last write failed. They are written again, from this
+// window's current values, with the next theme save that succeeds.
+const unsavedThemeKeys = new Set<string>();
 
+/** Write theme settings; on failure, remember their keys for the next save. */
+async function writeThemeSettings(
+  entries: Record<string, unknown>
+): Promise<void> {
+  try {
+    await savePrefs(entries);
+    for (const key of Object.keys(entries)) unsavedThemeKeys.delete(key);
+  } catch {
+    for (const key of Object.keys(entries)) unsavedThemeKeys.add(key);
+  }
+}
+
+/**
+ * Write the theme settings that changed since `before`, plus `forced` (what
+ * the reader just chose), plus any whose last write failed, in one save.
+ * Nothing else: another window may have chosen the other slot meanwhile,
+ * and rewriting it from this window's memory would undo that.
+ */
 async function saveThemeChoices(
   before: ThemeChoices,
   forced: Record<string, unknown> = {}
 ): Promise<void> {
   const all = themeChoices();
-  const entries = themeChoicesUnsaved
-    ? { ...all, ...forced }
-    : changedSettings(before, all, forced);
+  const retry: Record<string, unknown> = {};
+  for (const key of unsavedThemeKeys) {
+    if (key in all) retry[key] = all[key];
+  }
+  const entries = { ...retry, ...changedSettings(before, all, forced) };
   if (Object.keys(entries).length === 0) return;
-  await savePrefs(entries);
-  themeChoicesUnsaved = false;
+  await writeThemeSettings(entries);
 }
 
 /** Choose a theme: it fills its light or dark slot, and is shown unless following macOS. */
@@ -301,10 +315,8 @@ async function initTheme(): Promise<void> {
   );
   if (Object.keys(derived).length > 0) {
     // Only the slot that was missing or invalid, best effort: a store that
-    // cannot be written must not stop startup.
-    savePrefs(derived).catch(() => {
-      themeChoicesUnsaved = true;
-    });
+    // cannot be written must not stop startup (retried with the next save).
+    void writeThemeSettings(derived);
   }
   currentBodyFont = resolveInitialFontFamily(await store.get(BODY_FONT_KEY));
   currentCodeFont = resolveInitialFontFamily(await store.get(CODE_FONT_KEY));
