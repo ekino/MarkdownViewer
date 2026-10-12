@@ -457,7 +457,8 @@ fn open_new_window(app: tauri::AppHandle, path: Option<String>) -> Result<String
         // the frontend draws its own title bar over the native traffic lights.
         builder = builder
             .title_bar_style(tauri::TitleBarStyle::Overlay)
-            .hidden_title(true);
+            .hidden_title(true)
+            .traffic_light_position(tauri::LogicalPosition::new(18.0, 20.0));
     }
 
     // Cascade off the frontmost window so a new window never lands exactly on

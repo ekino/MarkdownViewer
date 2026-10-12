@@ -159,11 +159,11 @@
     #titlebar {
       display: flex;
       gap: 10px;
-      /* Controls line up with the native traffic lights (centred ~16px down). */
-      height: 46px;
-      align-items: flex-start;
-      padding-top: 1px;
-      padding-left: env(titlebar-area-x, 84px);
+      /* Controls sit centred in the bar, with the native traffic lights moved
+         to the same centre line (trafficLightPosition in tauri.conf.json). */
+      height: 52px;
+      align-items: center;
+      padding-left: env(titlebar-area-x, 88px);
       padding-right: 13px;
       flex-shrink: 0;
       user-select: none;
