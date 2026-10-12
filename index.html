@@ -219,6 +219,16 @@
       cursor: default;
     }
 
+    /* Optical centring: Bricolage sits high in its line box and the house
+       glyph reads low, so nudge each toward the key's centre. */
+    .key-btn--label .icon {
+      transform: translateY(-0.5px);
+    }
+
+    .key-btn--label span {
+      transform: translateY(1px);
+    }
+
     #nav-home.is-current {
       background: var(--ui-primary-bg);
       color: var(--ui-primary-text);
