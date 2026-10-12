@@ -54,6 +54,8 @@ import {
   resolveInitialOutlinePref,
   changedSettings,
   setSegmentActive,
+  settingsToWrite,
+  settleWrite,
   type FinderOpenPref,
   type FontSize,
   type FontWeight,
@@ -186,19 +188,22 @@ function themeChoices(): ThemeChoices {
 }
 
 // Theme settings whose last write failed. They are written again, from this
-// window's current values, with the next theme save that succeeds.
+// window's current values, with the next theme save. Known limit: if another
+// window wrote one of them in between, this window's value wins; the window
+// is a failed write followed by another window's write of the same key.
 const unsavedThemeKeys = new Set<string>();
 
 /** Write theme settings; on failure, remember their keys for the next save. */
 async function writeThemeSettings(
   entries: Record<string, unknown>
 ): Promise<void> {
+  let ok = true;
   try {
     await savePrefs(entries);
-    for (const key of Object.keys(entries)) unsavedThemeKeys.delete(key);
   } catch {
-    for (const key of Object.keys(entries)) unsavedThemeKeys.add(key);
+    ok = false;
   }
+  settleWrite(unsavedThemeKeys, entries, ok);
 }
 
 /**
@@ -211,12 +216,13 @@ async function saveThemeChoices(
   before: ThemeChoices,
   forced: Record<string, unknown> = {}
 ): Promise<void> {
-  const all = themeChoices();
-  const retry: Record<string, unknown> = {};
-  for (const key of unsavedThemeKeys) {
-    if (key in all) retry[key] = all[key];
-  }
-  const entries = { ...retry, ...changedSettings(before, all, forced) };
+  const entries = settingsToWrite(
+    // The follow switch is retried with the themes it was saved with.
+    { ...themeChoices(), [FOLLOW_SYSTEM_KEY]: followSystem },
+    before,
+    forced,
+    unsavedThemeKeys
+  );
   if (Object.keys(entries).length === 0) return;
   await writeThemeSettings(entries);
 }

@@ -283,3 +283,33 @@ export function changedSettings(
   }
   return { ...out, ...forced };
 }
+
+/**
+ * The settings one save should write: those that changed since `before`,
+ * those the reader just chose (`forced`), and those whose last write failed
+ * (`unsaved`), taken from the current values.
+ */
+export function settingsToWrite(
+  current: Record<string, unknown>,
+  before: Record<string, unknown>,
+  forced: Record<string, unknown>,
+  unsaved: ReadonlySet<string>
+): Record<string, unknown> {
+  const retry: Record<string, unknown> = {};
+  for (const key of unsaved) {
+    if (key in current) retry[key] = current[key];
+  }
+  return { ...retry, ...changedSettings(before, current, forced) };
+}
+
+/** After a write: its keys are saved, or still to be written. */
+export function settleWrite(
+  unsaved: Set<string>,
+  written: Record<string, unknown>,
+  ok: boolean
+): void {
+  for (const key of Object.keys(written)) {
+    if (ok) unsaved.delete(key);
+    else unsaved.add(key);
+  }
+}

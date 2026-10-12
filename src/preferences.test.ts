@@ -29,6 +29,8 @@ import {
   MIN_CUSTOM_FONT_SIZE,
   MAX_CUSTOM_FONT_SIZE,
   changedSettings,
+  settingsToWrite,
+  settleWrite,
 } from "./preferences";
 
 describe("resolveDark", () => {
@@ -383,5 +385,28 @@ describe("changedSettings", () => {
       themeId: "light",
     });
     expect(changedSettings(before, before)).toEqual({});
+  });
+});
+
+describe("theme settings retry", () => {
+  const current = { themeId: "light", dayThemeId: "sepia", followSystem: true };
+
+  it("writes the changes, the forced keys and the keys left unsaved", () => {
+    const before = { themeId: "light", dayThemeId: "light", followSystem: true };
+    expect(
+      settingsToWrite(current, before, { themeId: "light" }, new Set(["followSystem"]))
+    ).toEqual({ dayThemeId: "sepia", themeId: "light", followSystem: true });
+  });
+
+  it("ignores unsaved keys it has no value for", () => {
+    expect(settingsToWrite(current, current, {}, new Set(["gone"]))).toEqual({});
+  });
+
+  it("clears only the keys a successful write carried", () => {
+    const unsaved = new Set(["dayThemeId", "nightThemeId"]);
+    settleWrite(unsaved, { dayThemeId: "x" }, true);
+    expect([...unsaved]).toEqual(["nightThemeId"]);
+    settleWrite(unsaved, { themeId: "y" }, false);
+    expect([...unsaved].sort()).toEqual(["nightThemeId", "themeId"]);
   });
 });
