@@ -3,7 +3,7 @@
 // data and callbacks, so a failure leaves the page untouched and they can be
 // tested without the app. Every name and path goes in as text, never as HTML.
 
-import { iconEl, type IconName } from "./icons";
+import { appMark, iconEl, type IconName } from "./icons";
 import { t } from "./i18n";
 import type { Entry, Listing, RecentEntry } from "./utils";
 
@@ -97,7 +97,7 @@ export function buildHome(data: HomeData, actions: HomeActions): HTMLElement {
   const header = el("header", "home-header");
   const mark = el("span", "app-mark");
   mark.setAttribute("aria-hidden", "true");
-  mark.append(el("span", "app-mark-face", "M↓"));
+  mark.innerHTML = appMark();
   const titles = el("div", "home-titles");
   titles.append(el("h1", "home-title", t("app.name")), el("p", "home-tagline", t("home.tagline")));
   header.append(mark, titles);

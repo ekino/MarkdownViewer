@@ -1522,40 +1522,13 @@
 
     /* The app mark, sister of Speakino's: yellow tile, offset cream square. */
     .app-mark {
-      position: relative;
       width: 64px;
       height: 64px;
       flex-shrink: 0;
-      border-radius: 15px;
-      background: var(--ui-yellow);
-      border: 2px solid var(--ui-card-line);
     }
 
-    .app-mark::before {
-      content: "";
-      position: absolute;
-      left: 13px;
-      top: 12px;
-      width: 38px;
-      height: 38px;
-      border-radius: 8px;
-      background: #17130d;
-    }
-
-    .app-mark-face {
-      position: absolute;
-      left: 10px;
-      top: 9px;
-      width: 38px;
-      height: 38px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      border: 2px solid #17130d;
-      border-radius: 8px;
-      background: #fff6dc;
-      color: #17130d;
-      font: 500 14px var(--ui-mono);
+    .app-mark-svg {
+      display: block;
     }
 
     .home-titles {
