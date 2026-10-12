@@ -28,6 +28,7 @@ import {
   PRESET_FONT_SIZE_PX,
   MIN_CUSTOM_FONT_SIZE,
   MAX_CUSTOM_FONT_SIZE,
+  changedSettings,
 } from "./preferences";
 
 describe("resolveDark", () => {
@@ -369,5 +370,18 @@ describe("resolveInitialLaunchPref", () => {
 
   it("keeps a saved choice", () => {
     expect(resolveInitialLaunchPref("last-folder")).toBe("last-folder");
+  });
+});
+
+describe("changedSettings", () => {
+  it("keeps only what changed, plus what the reader just chose", () => {
+    const before = { themeId: "light", dayThemeId: "light", nightThemeId: "dark" };
+    const after = { themeId: "light", dayThemeId: "sepia", nightThemeId: "dark" };
+    expect(changedSettings(before, after)).toEqual({ dayThemeId: "sepia" });
+    // Choosing again what this window already shows is still written.
+    expect(changedSettings(before, before, { themeId: "light" })).toEqual({
+      themeId: "light",
+    });
+    expect(changedSettings(before, before)).toEqual({});
   });
 });

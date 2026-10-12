@@ -266,3 +266,20 @@ export function isLaunchPref(value: unknown): value is LaunchPref {
 export function resolveInitialLaunchPref(value: unknown): LaunchPref {
   return isLaunchPref(value) ? value : "home";
 }
+
+/**
+ * The settings to write: the keys whose value differs from `before`, plus
+ * every key of `forced` (what the reader just chose, written even when this
+ * window already had it, since another window may have changed the store).
+ */
+export function changedSettings(
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+  forced: Record<string, unknown> = {}
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(after)) {
+    if (before[key] !== value) out[key] = value;
+  }
+  return { ...out, ...forced };
+}

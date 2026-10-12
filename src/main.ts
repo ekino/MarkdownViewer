@@ -52,6 +52,7 @@ import {
   resolveInitialLaunchPref,
   resolveInitialFontWeight,
   resolveInitialOutlinePref,
+  changedSettings,
   setSegmentActive,
   type FinderOpenPref,
   type FontSize,
@@ -189,15 +190,21 @@ function themeChoices(): ThemeChoices {
  * save. Only what changed: another window may have chosen the other slot
  * meanwhile, and rewriting it from this window's memory would undo that.
  */
+// Set when the slots derived at startup could not be written: the next save
+// writes all three theme settings instead of only the changed ones.
+let themeChoicesUnsaved = false;
+
 async function saveThemeChoices(
   before: ThemeChoices,
-  extra: Record<string, unknown> = {}
+  forced: Record<string, unknown> = {}
 ): Promise<void> {
-  const entries: Record<string, unknown> = { ...extra };
-  for (const [key, value] of Object.entries(themeChoices())) {
-    if (before[key] !== value) entries[key] = value;
-  }
-  if (Object.keys(entries).length > 0) await savePrefs(entries);
+  const all = themeChoices();
+  const entries = themeChoicesUnsaved
+    ? { ...all, ...forced }
+    : changedSettings(before, all, forced);
+  if (Object.keys(entries).length === 0) return;
+  await savePrefs(entries);
+  themeChoicesUnsaved = false;
 }
 
 /** Choose a theme: it fills its light or dark slot, and is shown unless following macOS. */
@@ -214,7 +221,10 @@ async function selectTheme(
   if (!followSystem) currentThemeId = id;
   applyActiveTheme();
   refreshThemeGridSelection();
-  await saveThemeChoices(before);
+  await saveThemeChoices(before, {
+    [theme.isDark ? NIGHT_THEME_KEY : DAY_THEME_KEY]: id,
+    ...(followSystem ? {} : { [THEME_KEY]: id }),
+  });
 }
 
 function applyActiveTheme(): void {
@@ -285,12 +295,16 @@ async function initTheme(): Promise<void> {
   // Settings from before the day/night slots (or a slot whose theme is gone):
   // write the derived pair now, so it no longer depends on the fixed theme,
   // which changes as soon as the reader turns "follow macOS" off.
-  if (savedDay !== followThemes.day || savedNight !== followThemes.night) {
-    // Best effort: a store that cannot be written must not stop startup.
-    savePrefs({
-      [DAY_THEME_KEY]: followThemes.day,
-      [NIGHT_THEME_KEY]: followThemes.night,
-    }).catch(() => {});
+  const derived = changedSettings(
+    { [DAY_THEME_KEY]: savedDay, [NIGHT_THEME_KEY]: savedNight },
+    { [DAY_THEME_KEY]: followThemes.day, [NIGHT_THEME_KEY]: followThemes.night }
+  );
+  if (Object.keys(derived).length > 0) {
+    // Only the slot that was missing or invalid, best effort: a store that
+    // cannot be written must not stop startup.
+    savePrefs(derived).catch(() => {
+      themeChoicesUnsaved = true;
+    });
   }
   currentBodyFont = resolveInitialFontFamily(await store.get(BODY_FONT_KEY));
   currentCodeFont = resolveInitialFontFamily(await store.get(CODE_FONT_KEY));
@@ -363,7 +377,10 @@ async function toggleTheme(): Promise<void> {
   currentThemeId = newId;
   followSystem = false;
   applyActiveTheme();
-  await saveThemeChoices(before, { [FOLLOW_SYSTEM_KEY]: false });
+  await saveThemeChoices(before, {
+    [FOLLOW_SYSTEM_KEY]: false,
+    [THEME_KEY]: newId,
+  });
   syncPrefsUI();
   refreshThemeGridSelection();
 }
@@ -633,13 +650,16 @@ async function syncFullscreen(): Promise<void> {
   }
 }
 // Resize events fire during the full-screen animation, before the window
-// reports its new state: check again once the transition is over.
-let fullscreenRecheck: ReturnType<typeof setTimeout> | undefined;
+// reports its new state, and no event marks the end of it: check again a few
+// times over the next seconds.
+let fullscreenRechecks: ReturnType<typeof setTimeout>[] = [];
 void appWindow
   .onResized(() => {
     void syncFullscreen();
-    clearTimeout(fullscreenRecheck);
-    fullscreenRecheck = setTimeout(() => void syncFullscreen(), 800);
+    for (const timer of fullscreenRechecks) clearTimeout(timer);
+    fullscreenRechecks = [300, 900, 2000].map((ms) =>
+      setTimeout(() => void syncFullscreen(), ms)
+    );
   })
   .catch(() => {});
 void syncFullscreen();
@@ -1747,7 +1767,10 @@ function initPreferences(): void {
     followSystem = prefsFollowSystem.checked;
     applyActiveTheme();
     refreshThemeGridSelection();
-    await saveThemeChoices(before, { [FOLLOW_SYSTEM_KEY]: followSystem });
+    await saveThemeChoices(before, {
+      [FOLLOW_SYSTEM_KEY]: followSystem,
+      ...(followSystem ? {} : { [THEME_KEY]: currentThemeId }),
+    });
   });
 
   prefsLanguage.addEventListener("change", async () => {

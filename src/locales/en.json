@@ -59,7 +59,7 @@
   "editor.field.name": "Name",
   "editor.field.id": "Identifier",
   "editor.field.mode": "Mode",
-  "editor.field.pair": "Other-mode theme (suggestion)",
+  "editor.field.pair": "Other mode (suggestion)",
   "editor.mode.light": "Light",
   "editor.mode.dark": "Dark",
   "editor.cancel": "Cancel",
