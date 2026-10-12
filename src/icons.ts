@@ -52,5 +52,5 @@ export function iconEl(name: IconName, size = 16): SVGElement {
  * Same geometry as src-tauri/icons/icon.svg, cropped to the tile.
  */
 export function appMark(size = 64): string {
-  return `<svg class="app-mark-svg" width="${size}" height="${size}" viewBox="100 100 824 824" aria-hidden="true" focusable="false"><rect x="100" y="100" width="824" height="824" rx="185" fill="#FFC629"/><rect x="268" y="262" width="520" height="520" rx="96" fill="#17130D"/><rect x="236" y="230" width="520" height="520" rx="96" fill="#FFF6DC" stroke="#17130D" stroke-width="26"/><g fill="none" stroke="#17130D" stroke-width="44" stroke-linecap="round" stroke-linejoin="round"><path d="M318 590V380l86 120 86-120v210"/><path d="M610 380v210M556 536l54 54 54-54"/></g></svg>`;
+  return `<svg class="app-mark-svg" width="${size}" height="${size}" viewBox="100 100 824 824" aria-hidden="true" focusable="false"><rect x="100" y="100" width="824" height="824" rx="185" fill="#FFC629"/><rect x="268" y="262" width="520" height="520" rx="96" fill="#17130D"/><rect x="236" y="230" width="520" height="520" rx="96" fill="#FFF6DC" stroke="#17130D" stroke-width="26"/><g fill="none" stroke="#17130D" stroke-width="38" stroke-linecap="round" stroke-linejoin="round"><path d="M361 572V408l67 94 67-94v164"/><path d="M589 408v164M547 530l42 42 42-42"/></g></svg>`;
 }
