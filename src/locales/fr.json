@@ -171,5 +171,6 @@
   "prefs.themes.dark": "Thèmes sombres",
   "prefs.themes.day": "Le jour",
   "prefs.themes.night": "La nuit",
-  "prefs.footer": "Chaque réglage s'applique tout de suite."
+  "prefs.footer": "Chaque réglage s'applique tout de suite.",
+  "prefs.appearance.import.saveError": "Le thème est valide mais n'a pas pu être enregistré."
 }

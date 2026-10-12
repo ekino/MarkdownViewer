@@ -171,5 +171,6 @@
   "prefs.themes.dark": "Dark themes",
   "prefs.themes.day": "By day",
   "prefs.themes.night": "By night",
-  "prefs.footer": "Every setting applies right away."
+  "prefs.footer": "Every setting applies right away.",
+  "prefs.appearance.import.saveError": "The theme is valid but could not be saved."
 }

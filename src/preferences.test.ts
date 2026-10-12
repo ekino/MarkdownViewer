@@ -398,6 +398,16 @@ describe("theme settings retry", () => {
     ).toEqual({ dayThemeId: "sepia", themeId: "light", followSystem: true });
   });
 
+  it("does not write a setting that did not change", () => {
+    // Another window may have changed it: rewriting this window's value
+    // would undo that.
+    const before = { themeId: "light", followSystem: false };
+    const after = { themeId: "sepia", followSystem: false };
+    expect(settingsToWrite(after, before, {}, new Set())).toEqual({
+      themeId: "sepia",
+    });
+  });
+
   it("ignores unsaved keys it has no value for", () => {
     expect(settingsToWrite(current, current, {}, new Set(["gone"]))).toEqual({});
   });

@@ -177,20 +177,23 @@ function reconcileThemeChoices(renamed?: { from: ThemeId; to: ThemeId }): void {
   );
 }
 
-type ThemeChoices = Record<string, ThemeId>;
+type ThemeChoices = Record<string, ThemeId | boolean>;
 
+/** Everything a theme save may write, so "before" and "after" compare alike. */
 function themeChoices(): ThemeChoices {
   return {
     [THEME_KEY]: currentThemeId,
     [DAY_THEME_KEY]: followThemes.day,
     [NIGHT_THEME_KEY]: followThemes.night,
+    [FOLLOW_SYSTEM_KEY]: followSystem,
   };
 }
 
 // Theme settings whose last write failed. They are written again, from this
 // window's current values, with the next theme save. Known limit: if another
-// window wrote one of them in between, this window's value wins; the window
-// is a failed write followed by another window's write of the same key.
+// app window wrote one of them in between, this window's value wins. That
+// takes a failed write here followed by a successful write of the same key
+// elsewhere.
 const unsavedThemeKeys = new Set<string>();
 
 /** Write theme settings; on failure, remember their keys for the next save. */
@@ -217,8 +220,7 @@ async function saveThemeChoices(
   forced: Record<string, unknown> = {}
 ): Promise<void> {
   const entries = settingsToWrite(
-    // The follow switch is retried with the themes it was saved with.
-    { ...themeChoices(), [FOLLOW_SYSTEM_KEY]: followSystem },
+    themeChoices(),
     before,
     forced,
     unsavedThemeKeys
@@ -1814,12 +1816,27 @@ function initPreferences(): void {
       filters: [{ name: "Theme JSON", extensions: ["json"] }],
     });
     if (!selected || typeof selected !== "string") return;
+    // An unreadable or invalid file, and a valid theme that could not be
+    // stored, are different problems: say which one happened.
+    let message: string | null = null;
+    let text: string | null = null;
     try {
-      const text = await readTextFile(selected);
-      const ok = await importCustomTheme(text);
-      if (!ok) throw new Error("invalid");
+      text = await readTextFile(selected);
     } catch {
-      prefsImportError.textContent = t("prefs.appearance.import.error");
+      message = t("prefs.appearance.import.error");
+    }
+    if (text !== null) {
+      try {
+        if (!(await importCustomTheme(text))) {
+          message = t("prefs.appearance.import.error");
+        }
+      } catch (e) {
+        console.warn("Theme import failed:", e);
+        message = t("prefs.appearance.import.saveError");
+      }
+    }
+    if (message) {
+      prefsImportError.textContent = message;
       prefsImportError.style.display = "inline";
     }
   });
