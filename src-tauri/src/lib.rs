@@ -3,7 +3,8 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use tauri::menu::{
-    CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, Submenu, SubmenuBuilder,
+    CheckMenuItemBuilder, MenuBuilder, MenuItem, MenuItemBuilder, PredefinedMenuItem, Submenu,
+    SubmenuBuilder,
 };
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder, Wry};
 
@@ -116,6 +117,63 @@ fn window_sort_key(label: &str) -> (u8, u32, String) {
         .and_then(|s| s.parse::<u32>().ok())
         .unwrap_or(u32::MAX);
     (1, n, label.to_string())
+}
+
+// The Go menu is app-wide while each window has its own history: every window
+// reports which steps it can take, and the menu shows the frontmost window's.
+// A window that has not reported yet leaves every item enabled.
+#[derive(Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NavMenuState {
+    back: bool,
+    forward: bool,
+    home: bool,
+    up: bool,
+    close_folder: bool,
+}
+
+/// The Go menu items, by menu id.
+type NavItems = Vec<(&'static str, MenuItem<Wry>)>;
+
+static NAV_ITEMS: OnceLock<Mutex<NavItems>> = OnceLock::new();
+static NAV_STATES: OnceLock<Mutex<HashMap<String, NavMenuState>>> = OnceLock::new();
+
+fn nav_items() -> &'static Mutex<NavItems> {
+    NAV_ITEMS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn nav_states() -> &'static Mutex<HashMap<String, NavMenuState>> {
+    NAV_STATES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Enable the Go menu items for the window `label`, the frontmost one.
+fn apply_nav_menu(label: &str) {
+    let state = nav_states().lock().ok().and_then(|s| s.get(label).copied());
+    let Ok(items) = nav_items().lock() else {
+        return;
+    };
+    for (id, item) in items.iter() {
+        let enabled = match (state, *id) {
+            (None, _) => true,
+            (Some(s), "nav_back") => s.back,
+            (Some(s), "nav_forward") => s.forward,
+            (Some(s), "nav_home") => s.home,
+            (Some(s), "nav_up") => s.up,
+            (Some(s), "nav_close_folder") => s.close_folder,
+            _ => true,
+        };
+        let _ = item.set_enabled(enabled);
+    }
+}
+
+#[tauri::command]
+fn set_nav_menu_state(window: tauri::Window, state: NavMenuState) {
+    if let Ok(mut states) = nav_states().lock() {
+        states.insert(window.label().to_string(), state);
+    }
+    if window.is_focused().unwrap_or(false) {
+        apply_nav_menu(window.label());
+    }
 }
 
 const ARRANGE_PREFIX: &str = "window-arrange:";
@@ -531,9 +589,12 @@ async fn document_mtime(path: String) -> Result<u64, String> {
 // What a path is right now, for the home screen's "Reprendre" card: it tells a
 // file that is gone from one the app may not read. Follows symlinks. Indicative
 // only — opening the document still goes through read_document.
+//
+// A stat on a network or unmounted volume can block for seconds: it runs on
+// the blocking pool so it holds no async worker meanwhile.
 #[tauri::command]
 async fn path_status(path: String) -> &'static str {
-    match std::fs::metadata(&path) {
+    tokio::task::spawn_blocking(move || match std::fs::metadata(&path) {
         Ok(meta) if meta.is_file() => "file",
         Ok(meta) if meta.is_dir() => "dir",
         Ok(_) => "other",
@@ -542,7 +603,9 @@ async fn path_status(path: String) -> &'static str {
             std::io::ErrorKind::PermissionDenied => "denied",
             _ => "error",
         },
-    }
+    })
+    .await
+    .unwrap_or("error")
 }
 
 // Reading through the `fs` plugin adds large fixed latency per open on
@@ -782,6 +845,7 @@ pub fn run(path_arg: Option<String>) {
             get_pending_open,
             open_new_window,
             set_window_title,
+            set_nav_menu_state,
             list_system_fonts,
             themes_dir,
             list_disk_themes,
@@ -863,6 +927,15 @@ pub fn run(path_arg: Option<String>) {
             let nav_close = MenuItemBuilder::with_id("nav_close_folder", "Close Folder")
                 .accelerator("CmdOrCtrl+Shift+W")
                 .build(app)?;
+            if let Ok(mut items) = nav_items().lock() {
+                *items = vec![
+                    ("nav_back", nav_back.clone()),
+                    ("nav_forward", nav_forward.clone()),
+                    ("nav_home", nav_home.clone()),
+                    ("nav_up", nav_up.clone()),
+                    ("nav_close_folder", nav_close.clone()),
+                ];
+            }
 
             // Contents are filled in by rebuild_window_menu once the handle is
             // stored below; it appends the fixed items plus one entry per window.
@@ -1059,6 +1132,11 @@ pub fn run(path_arg: Option<String>) {
                     if let Ok(mut saved) = pre_arrange().lock() {
                         saved.remove(label);
                     }
+                    if let Ok(mut states) = nav_states().lock() {
+                        states.remove(label);
+                    }
+                } else {
+                    apply_nav_menu(label);
                 }
                 let _ = rebuild_window_menu(app_handle);
             }

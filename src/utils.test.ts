@@ -6,6 +6,8 @@ import {
   filterAndSortEntries,
   classifyLink,
   parseMarkdownHref,
+  parentLabel,
+  tildePath,
   findReadme,
   mergeRecent,
   resolveInitialView,
@@ -83,8 +85,25 @@ describe("extractRootName", () => {
     expect(extractRootName("myFolder")).toBe("myFolder");
   });
 
-  it("handles trailing slash", () => {
-    expect(extractRootName("/a/b/c/")).toBe("root");
+  it("ignores a trailing slash", () => {
+    expect(extractRootName("/a/b/c/")).toBe("c");
+  });
+
+  it("names the volume root /", () => {
+    expect(extractRootName("/")).toBe("/");
+  });
+});
+
+describe("tildePath and parentLabel", () => {
+  it("writes the home folder ~", () => {
+    expect(tildePath("/Users/me/dev/mdv")).toBe("~/dev/mdv");
+    expect(tildePath("/Volumes/Docs")).toBe("/Volumes/Docs");
+  });
+
+  it("gives where a path sits, not the path itself", () => {
+    expect(parentLabel("/Users/me/dev/mdv")).toBe("~/dev");
+    expect(parentLabel("/Users/me/dev/mdv/")).toBe("~/dev");
+    expect(parentLabel("/Volumes/Docs")).toBe("/Volumes");
   });
 });
 
@@ -187,6 +206,17 @@ describe("classifyLink", () => {
 });
 
 describe("parseMarkdownHref", () => {
+  it("decodes the file part", () => {
+    expect(parseMarkdownHref("My%20Guide.md#Mise%20en%20route")).toEqual({
+      filePart: "My Guide.md",
+      anchor: "Mise en route",
+    });
+  });
+
+  it("keeps a file part with a malformed escape as written", () => {
+    expect(parseMarkdownHref("100%.md").filePart).toBe("100%.md");
+  });
+
   it("parses a simple markdown link", () => {
     expect(parseMarkdownHref("guide.md")).toEqual({
       filePart: "guide.md",

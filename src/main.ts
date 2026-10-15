@@ -97,6 +97,7 @@ import {
   classifyLink,
   decodeAnchor,
   extractRootName,
+  parentLabel,
   findReadme,
   getFullPath,
   isLastRead,
@@ -113,7 +114,6 @@ import {
 import {
   createNavigator,
   returnTarget,
-  sameTarget,
   type CommitContext,
   type DecorationContext,
   type NavEntry,
@@ -713,6 +713,14 @@ const RECENT_MAX = 10;
 async function saveRootPath(path: string): Promise<void> {
   const store = await load(STORE_FILE);
   await store.set(STORE_KEY, path);
+  await store.save();
+}
+
+/** Forget the last folder, unless another window has saved a different one since. */
+async function forgetRootPath(path: string): Promise<void> {
+  const store = await load(STORE_FILE);
+  if ((await store.get(STORE_KEY)) !== path) return;
+  await store.delete(STORE_KEY);
   await store.save();
 }
 
@@ -2303,14 +2311,8 @@ async function init(): Promise<void> {
     await saveRootPath(target.rootPath);
     await recordRecent(target.rootPath, "folder");
   }
-  // A startup document that cannot be read still leaves the window usable.
-  if (!ok && !nav.state().current && nav.pending() === 0) {
-    const failure = lastNavError && sameTarget(lastNavError.target, target) ? lastNavError : null;
-    const homeShown = await nav.navigate({ kind: "home", rootPath: null, dir: [] });
-    // The home commit cleared the banner: tell the reader why they are here —
-    // unless something else was opened meanwhile and replaced the fallback.
-    if (homeShown && failure) onNavigationError(failure.error, failure.target);
-  }
+  // A startup view that failed falls back to home in onNavigationError; one
+  // overtaken by an open that then failed too lands there the same way.
 }
 
 /** A window holds something the reader may want to keep: a folder, or an open in progress. */
@@ -2372,7 +2374,10 @@ function goHome(): void {
 }
 
 function closeFolder(): void {
+  const closed = rootPath;
   void nav.navigate({ kind: "home", rootPath: null, dir: [] }).then((ok) => {
+    // A folder closed on purpose is not reopened at the next launch.
+    if (ok && closed) void forgetRootPath(closed).catch((e) => console.warn("Could not forget the folder:", e));
     // The control that closed it (banner, folder menu) is gone: land on Home.
     const focused = document.activeElement as HTMLElement | null;
     if (ok && (!focused || focused === document.body || focused.getClientRects().length === 0)) {
@@ -2431,11 +2436,21 @@ async function listForNavigation(root: string, dir: string[], fresh: boolean): P
   return listing;
 }
 
-async function pathStatus(path: string): Promise<string> {
+/** How long the home screen waits on a path's status (network volumes can hang). */
+const PATH_STATUS_TIMEOUT = 800;
+
+/** "unknown" when the volume took too long to answer. */
+async function pathStatus(path: string, timeoutMs?: number): Promise<string> {
+  const status = invoke<string>("path_status", { path }).catch(() => "error");
+  if (timeoutMs === undefined) return status;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<string>((resolve) => {
+    timer = setTimeout(() => resolve("unknown"), timeoutMs);
+  });
   try {
-    return await invoke<string>("path_status", { path });
-  } catch {
-    return "error";
+    return await Promise.race([status, timeout]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -2490,19 +2505,31 @@ let currentDocTitle = "";
 
 async function buildHomeData(keptRoot: string | null): Promise<HomeData> {
   const [recents, lastRead] = await Promise.all([loadRecents(), loadLastRead()]);
+  // Both checks at once, and bounded: the home screen must not wait on a slow
+  // volume. A path that did not answer in time is offered as is; opening it
+  // reports the failure if there is one.
+  const [resumeStatus, keptStatus] = await Promise.all([
+    lastRead ? pathStatus(`${lastRead.rootPath}/${lastRead.file}`, PATH_STATUS_TIMEOUT) : null,
+    keptRoot ? pathStatus(keptRoot, PATH_STATUS_TIMEOUT) : null,
+  ]);
   let resume: HomeData["resume"] = null;
   if (lastRead) {
-    const status = await pathStatus(`${lastRead.rootPath}/${lastRead.file}`);
+    const status = resumeStatus;
     resume = {
       title: lastRead.title,
       file: lastRead.file,
       rootName: extractRootName(lastRead.rootPath),
-      status: status === "file" ? "ok" : status === "denied" || status === "error" ? "denied" : "missing",
+      status:
+        status === "file" || status === "unknown"
+          ? "ok"
+          : status === "denied" || status === "error"
+            ? "denied"
+            : "missing",
     };
   }
   let kept: HomeData["kept"] = null;
   if (keptRoot) {
-    kept = { name: extractRootName(keptRoot), accessible: (await pathStatus(keptRoot)) === "dir" };
+    kept = { name: extractRootName(keptRoot), accessible: keptStatus === "dir" || keptStatus === "unknown" };
   }
   return { firstRun: recents.length === 0 && !lastRead, kept, resume, recents };
 }
@@ -2554,14 +2581,17 @@ async function prepare(target: NavEntry, _stale: () => boolean, options: { reloa
 
 const fileCount = (listing: Listing) => listing.entries.filter((e) => e.kind === "file").length;
 
+/** Open an entry listed in `dir` of the folder `root`: its folder view, or the document. */
+function openEntry(root: string, dir: string[], entry: Entry): void {
+  const path = [...dir, entry.name];
+  if (entry.kind === "directory") void nav.navigate({ kind: "folder", rootPath: root, dir: path });
+  else void openDocument(root, path.join("/"));
+}
+
 /** The sidebar for a folder of the open root. */
 function sidebarNode(root: string, dir: string[], listing: Listing, activeName: string | null, readme: string | null) {
   return buildFileList(listing, dir.length > 0, activeName, findReadmeName(listing, readme), {
-    open: (entry) => {
-      const path = [...dir, entry.name];
-      if (entry.kind === "directory") void nav.navigate({ kind: "folder", rootPath: root, dir: path });
-      else void openDocument(root, path.join("/"));
-    },
+    open: (entry) => openEntry(root, dir, entry),
     up: () => void nav.navigate({ kind: "folder", rootPath: root, dir: dir.slice(0, -1) }),
   });
 }
@@ -2576,11 +2606,7 @@ function folderViewNode(root: string, dir: string[], listing: Listing, knownRead
   return buildFolderView(
     { rootName: extractRootName(root), dir, listing, readme },
     {
-      open: (entry) => {
-        const path = [...dir, entry.name];
-        if (entry.kind === "directory") void nav.navigate({ kind: "folder", rootPath: root, dir: path });
-        else void openDocument(root, path.join("/"));
-      },
+      open: (entry) => openEntry(root, dir, entry),
       openReadme: () => {
         if (readmePath) void openDocument(root, readmePath);
       },
@@ -2837,6 +2863,7 @@ let userScrolledSincePositioning = false;
 function applyPositioning(scroller: HTMLElement, positioning: Positioning): void {
   userScrolledSincePositioning = false;
   markProgrammaticScroll();
+  const before = scroller.scrollTop;
   if (positioning.mode === "anchor") {
     // A link to a heading that does not exist leaves the reader where they are.
     markdownEl.querySelector(`#${CSS.escape(positioning.anchor)}`)?.scrollIntoView({ block: "start" });
@@ -2845,10 +2872,27 @@ function applyPositioning(scroller: HTMLElement, positioning: Positioning): void
   } else {
     scroller.scrollTop = 0;
   }
+  // Already in place: no scroll event will close the window, so close it now
+  // and the reader's next scroll counts as theirs.
+  if (scroller.scrollTop === before) endProgrammaticScroll();
 }
 
-contentEl.addEventListener("scrollend", () => {
+function endProgrammaticScroll(): void {
   programmaticScroll = false;
+  if (programmaticTimer !== null) clearTimeout(programmaticTimer);
+  programmaticTimer = null;
+}
+
+contentEl.addEventListener("scrollend", endProgrammaticScroll);
+
+// The reader's own input: whatever scroll follows is theirs, even inside the
+// window the app opened for its own scrolls.
+const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
+for (const type of ["wheel", "touchstart", "pointerdown"] as const) {
+  contentEl.addEventListener(type, endProgrammaticScroll, { passive: true });
+}
+document.addEventListener("keydown", (e) => {
+  if (SCROLL_KEYS.has(e.key) && activeScreen() === "doc") endProgrammaticScroll();
 });
 
 contentEl.addEventListener("scroll", () => {
@@ -2888,11 +2932,24 @@ function captureScroll(): number {
   return homeEl.scrollTop;
 }
 
-let lastNavError: { error: unknown; target: NavEntry } | null = null;
-
 function onNavigationError(error: unknown, target: NavEntry): void {
-  lastNavError = { error, target };
   console.error("Failed to open:", target, error);
+  showLoadError(target);
+  // Nothing on screen yet (a startup open that failed, wherever it came from):
+  // show home so the window stays usable. Checked once the navigator has let
+  // go of the failed navigation; another one still loading takes over instead.
+  if (target.kind !== "home") {
+    queueMicrotask(() => {
+      if (nav.state().current || nav.pending() > 0) return;
+      void nav.navigate({ kind: "home", rootPath: null, dir: [] }).then((shown) => {
+        // The home commit cleared the banner: tell the reader why they are here.
+        if (shown) showLoadError(target);
+      });
+    });
+  }
+}
+
+function showLoadError(target: NavEntry): void {
   // Surface the failure. A console-only error made a whole class of unopenable
   // files look like an unresponsive click: the sidebar listed them, selecting
   // one simply did nothing.
@@ -2933,6 +2990,25 @@ function syncNavButtons(): void {
   navHomeBtn.classList.toggle("is-current", home);
   if (home) navHomeBtn.setAttribute("aria-current", "page");
   else navHomeBtn.removeAttribute("aria-current");
+  syncNavMenu(state.current, state.canBack, state.canForward);
+}
+
+let navMenuKey = "";
+
+/** The Go menu is app-wide: tell it what this window can do; it shows the frontmost window's. */
+function syncNavMenu(current: NavEntry | null, canBack: boolean, canForward: boolean): void {
+  const inFolder = current !== null && current.rootPath !== null;
+  const menuState = {
+    back: canBack,
+    forward: canForward,
+    home: current?.kind !== "home",
+    up: inFolder && (current.kind === "doc" || (current.kind === "folder" && current.dir.length > 0)),
+    closeFolder: inFolder,
+  };
+  const key = JSON.stringify(menuState);
+  if (key === navMenuKey) return;
+  navMenuKey = key;
+  void invoke("set_nav_menu_state", { state: menuState }).catch((e) => console.warn("Go menu not updated:", e));
 }
 
 // Data the home screen on display was built from: refreshing only when it
@@ -3008,10 +3084,6 @@ async function resumeReading(): Promise<void> {
 async function openResumeFolder(): Promise<void> {
   const lastRead = await loadLastRead();
   if (lastRead) await openFolderPath(lastRead.rootPath);
-}
-
-function parentLabel(path: string): string {
-  return path.replace(/^\/Users\/[^/]+/, "~");
 }
 
 // --- File loading ---

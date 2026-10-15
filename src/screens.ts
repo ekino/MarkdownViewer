@@ -5,7 +5,7 @@
 
 import { appMark, iconEl, type IconName } from "./icons";
 import { t } from "./i18n";
-import type { Entry, Listing, RecentEntry } from "./utils";
+import { extractRootName, parentLabel, type Entry, type Listing, type RecentEntry } from "./utils";
 
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -37,17 +37,6 @@ export function keycaps(keys: string[], className = "keycaps"): HTMLElement {
 
 function format(key: string, values: Record<string, string>): string {
   return Object.entries(values).reduce((s, [k, v]) => s.replace(`{${k}}`, v), t(key));
-}
-
-function baseName(path: string): string {
-  return path.split("/").filter(Boolean).pop() ?? path;
-}
-
-function parentLabel(path: string): string {
-  const parts = path.split("/").filter(Boolean);
-  parts.pop();
-  const home = /^\/Users\/[^/]+/;
-  return ("/" + parts.join("/")).replace(home, "~");
 }
 
 // --- Home ---
@@ -153,9 +142,9 @@ function buildRecents(recents: RecentEntry[], actions: HomeActions): HTMLElement
     const tile = el("span", `recent-tile recent-tile--${entry.kind}`);
     tile.append(iconEl(entry.kind === "folder" ? "folder" : "file"));
     const text = el("span", "recent-text");
-    text.append(el("span", "recent-name", baseName(entry.path)), el("span", "recent-path mono", parentLabel(entry.path)));
+    text.append(el("span", "recent-name", extractRootName(entry.path)), el("span", "recent-path mono", parentLabel(entry.path)));
     b.append(tile, text);
-    b.setAttribute("aria-label", `${baseName(entry.path)} — ${t(`home.recent.${entry.kind}`)}`);
+    b.setAttribute("aria-label", `${extractRootName(entry.path)} — ${t(`home.recent.${entry.kind}`)}`);
     b.addEventListener("click", () => actions.openRecent(entry));
     li.append(b);
     list.append(li);

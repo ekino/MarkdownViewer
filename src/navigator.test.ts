@@ -42,6 +42,7 @@ function harness() {
   const errors: string[] = [];
   const decorations: DecorationContext[] = [];
   let scroll = 0;
+  let afterError: () => void = () => {};
   let decorate: (ctx: DecorationContext) => Promise<void> = async (ctx) => {
     decorations.push(ctx);
   };
@@ -65,6 +66,7 @@ function harness() {
     decorate: (ctx) => decorate(ctx),
     onError(_e, target) {
       errors.push(key(target));
+      afterError();
     },
   });
 
@@ -79,6 +81,9 @@ function harness() {
     },
     setDecorate: (fn: (ctx: DecorationContext) => Promise<void>) => {
       decorate = fn;
+    },
+    setAfterError: (fn: () => void) => {
+      afterError = fn;
     },
     /** Resolve the pending prepare of `entry` with `content` (defaults to its key). */
     async finish(entry: NavEntry, content?: string) {
@@ -443,12 +448,20 @@ describe("createNavigator", () => {
     expect(done).toHaveBeenCalled();
   });
 
-  it("patchCurrent edits the entry on screen without pushing", async () => {
+  it("a startup open that failed has let go by the next microtask: the window can fall back", async () => {
+    // main.ts shows home from a microtask queued in onError when nothing is on
+    // screen and nothing else loads: both must already hold at that point.
     const h = harness();
-    await start(h, home("/root"));
-    h.nav.patchCurrent({ rootPath: null });
-    expect(h.nav.state().current?.rootPath).toBeNull();
-    expect(h.nav.state().entries).toHaveLength(1);
+    const commitInitial = h.nav.reserveInitial();
+    const opened = h.nav.navigate(doc("a.md")); // a Finder open overtakes the startup view
+    const initial = commitInitial(home());
+    const seen: { current: unknown; pending: number }[] = [];
+    h.setAfterError(() => queueMicrotask(() => seen.push({ current: h.nav.state().current, pending: h.nav.pending() })));
+    await h.finish(home());
+    await h.fail(doc("a.md"));
+    expect(await initial).toBe(false);
+    expect(await opened).toBe(false);
+    expect(seen).toEqual([{ current: null, pending: 0 }]);
   });
 
   it("re-asking for the view on screen cancels a load in progress", async () => {

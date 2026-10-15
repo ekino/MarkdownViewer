@@ -140,8 +140,6 @@ export interface Navigator {
   runExclusive<T>(task: () => Promise<T>): Promise<T>;
   /** Settles when the current view's decorations are done. */
   decorationsDone(): Promise<void>;
-  /** Patch the current entry in place (e.g. its rootPath once a folder is closed). */
-  patchCurrent(patch: Partial<NavEntry>): void;
   /** Number of navigations still preparing. */
   pending(): number;
   state(): NavigatorState;
@@ -318,10 +316,6 @@ export function createNavigator<P, B>(deps: NavigatorDeps<P, B>): Navigator {
       }
     },
     decorationsDone: () => decorations,
-    patchCurrent(patch) {
-      if (index < 0) return;
-      entries[index] = { ...entries[index], ...patch, dir: [...(patch.dir ?? entries[index].dir)] };
-    },
     pending: () => inFlight,
     state,
   };

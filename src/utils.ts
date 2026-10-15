@@ -28,10 +28,24 @@ export function getFullPath(
 }
 
 /**
- * Extract the folder name from an absolute path.
+ * The last name in a path, trailing slash or not; `/` for the volume root.
  */
 export function extractRootName(path: string): string {
-  return path.split("/").pop() || "root";
+  const name = path.split("/").filter(Boolean).pop();
+  if (name) return name;
+  return path.startsWith("/") ? "/" : "root";
+}
+
+/** A path with the home folder written `~`: `/Users/me/dev` → `~/dev`. */
+export function tildePath(path: string): string {
+  return path.replace(/^\/Users\/[^/]+/, "~");
+}
+
+/** Where a file or folder sits, written short: `/Users/me/dev/mdv` → `~/dev`. */
+export function parentLabel(path: string): string {
+  const parts = path.split("/").filter(Boolean);
+  parts.pop();
+  return tildePath("/" + parts.join("/"));
 }
 
 /** Extensions the app opens: the same list the Finder association and ⌘O accept. */
@@ -121,23 +135,29 @@ export function classifyLink(
 }
 
 /**
- * Parse a markdown link href into file part and optional anchor.
+ * Parse a markdown link href into file part and optional anchor, both decoded:
+ * `My%20Guide.md` names the file `My Guide.md`.
  */
 export function parseMarkdownHref(
   href: string
 ): { filePart: string; anchor: string | undefined } {
-  const [filePart, rawAnchor] = href.split("#");
-  return { filePart, anchor: decodeAnchor(rawAnchor) };
+  const [rawFile, rawAnchor] = href.split("#");
+  return { filePart: decodeOrRaw(rawFile), anchor: decodeAnchor(rawAnchor) };
 }
 
-/** `#` alone means no anchor; an undecodable fragment is used as written. */
-export function decodeAnchor(raw: string | undefined): string | undefined {
-  if (!raw) return undefined;
+/** A malformed escape (`100%.md`) is used as written. */
+function decodeOrRaw(raw: string): string {
   try {
     return decodeURIComponent(raw);
   } catch {
     return raw;
   }
+}
+
+/** `#` alone means no anchor; an undecodable fragment is used as written. */
+export function decodeAnchor(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  return decodeOrRaw(raw);
 }
 
 /**
