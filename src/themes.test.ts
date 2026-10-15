@@ -553,6 +553,14 @@ describe("slotsToMigrate", () => {
     });
   });
 
+  it("saves the missing slot when only the other one was chosen", () => {
+    // Follow macOS on, a night theme picked: the day slot must not keep
+    // following the fixed theme, which the reader may change later.
+    expect(slotsToMigrate({ themeId: undefined, appearance: undefined, day: undefined, night: "nord" }, follow)).toEqual({
+      dayThemeId: "sepia",
+    });
+  });
+
   it("never rewrites a saved slot, even one whose theme is unknown right now", () => {
     expect(slotsToMigrate({ themeId: "sepia", appearance: undefined, day: "my-theme", night: "gone" }, follow)).toEqual({});
   });

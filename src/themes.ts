@@ -207,21 +207,22 @@ export interface FollowThemes {
 }
 
 /**
- * The day/night slots to save at startup. Only settings from before the slots
- * existed need it — a fixed theme saved, a slot never written — so the pair
- * stops depending on the fixed theme, which changes as soon as the reader
- * turns "follow macOS" off.
+ * The day/night slots to save at startup: a slot never written, in settings
+ * that already hold a theme choice (a fixed theme, or the other slot). Saving
+ * it stops it depending on the fixed theme, which changes as soon as the
+ * reader turns "follow macOS" off.
  *
  * Nothing else is written: a slot whose theme is unknown right now (a custom
  * theme file unreadable for a moment) keeps its saved id and resolves again
- * next launch, and settings with no theme saved at all (first launch, or a
+ * next launch, and settings with no theme choice at all (first launch, or a
  * settings file the store could not read and treats as empty) are left alone.
  */
 export function slotsToMigrate(
   saved: { themeId: unknown; appearance: unknown; day: unknown; night: unknown },
   follow: FollowThemes
 ): Record<string, ThemeId> {
-  if (saved.themeId === undefined && saved.appearance === undefined) return {};
+  const anyChoice = [saved.themeId, saved.appearance, saved.day, saved.night].some((v) => v !== undefined);
+  if (!anyChoice) return {};
   const out: Record<string, ThemeId> = {};
   if (saved.day === undefined) out[DAY_THEME_KEY] = follow.day;
   if (saved.night === undefined) out[NIGHT_THEME_KEY] = follow.night;
