@@ -105,6 +105,7 @@ import {
   listingStatusFromError,
   mergeRecent,
   parseMarkdownHref,
+  decodePathPart,
   resolveInitialView,
   resolvePath,
   shouldWriteLastRead,
@@ -710,18 +711,33 @@ const RECENT_MAX = 10;
 
 // --- Store persistence ---
 
-async function saveRootPath(path: string): Promise<void> {
-  const store = await load(STORE_FILE);
-  await store.set(STORE_KEY, path);
-  await store.save();
+// This window's writes to the last folder, one at a time: closing a folder then
+// opening another must not let the close's read-then-delete land after the save.
+// (Two windows can still interleave: the store has no compare-and-set.)
+let rootPathWrites: Promise<void> = Promise.resolve();
+
+function queueRootPathWrite(write: () => Promise<void>): Promise<void> {
+  const next = rootPathWrites.then(write);
+  rootPathWrites = next.catch(() => {});
+  return next;
 }
 
-/** Forget the last folder, unless another window has saved a different one since. */
-async function forgetRootPath(path: string): Promise<void> {
-  const store = await load(STORE_FILE);
-  if ((await store.get(STORE_KEY)) !== path) return;
-  await store.delete(STORE_KEY);
-  await store.save();
+function saveRootPath(path: string): Promise<void> {
+  return queueRootPathWrite(async () => {
+    const store = await load(STORE_FILE);
+    await store.set(STORE_KEY, path);
+    await store.save();
+  });
+}
+
+/** Forget the last folder, unless another one has been saved since. */
+function forgetRootPath(path: string): Promise<void> {
+  return queueRootPathWrite(async () => {
+    const store = await load(STORE_FILE);
+    if ((await store.get(STORE_KEY)) !== path) return;
+    await store.delete(STORE_KEY);
+    await store.save();
+  });
 }
 
 async function loadRootPath(): Promise<string | null> {
@@ -2311,8 +2327,8 @@ async function init(): Promise<void> {
     await saveRootPath(target.rootPath);
     await recordRecent(target.rootPath, "folder");
   }
-  // A startup view that failed falls back to home in onNavigationError; one
-  // overtaken by an open that then failed too lands there the same way.
+  // A startup view that failed, or was overtaken by an open that failed, falls
+  // back to home through the navigator's onNothingShown.
 }
 
 /** A window holds something the reader may want to keep: a folder, or an open in progress. */
@@ -2504,7 +2520,12 @@ function activeScreen(): Screen {
 let currentDocTitle = "";
 
 async function buildHomeData(keptRoot: string | null): Promise<HomeData> {
-  const [recents, lastRead] = await Promise.all([loadRecents(), loadLastRead()]);
+  // Home is where a window falls back when nothing else opens: it must not fail.
+  // An unreadable store shows an empty home rather than nothing.
+  const [recents, lastRead] = await Promise.all([
+    loadRecents().catch((e) => (console.warn("Recents unreadable:", e), [] as RecentEntry[])),
+    loadLastRead().catch((e) => (console.warn("Last read unreadable:", e), null)),
+  ]);
   // Both checks at once, and bounded: the home screen must not wait on a slow
   // volume. A path that did not answer in time is offered as is; opening it
   // reports the failure if there is one.
@@ -2863,7 +2884,6 @@ let userScrolledSincePositioning = false;
 function applyPositioning(scroller: HTMLElement, positioning: Positioning): void {
   userScrolledSincePositioning = false;
   markProgrammaticScroll();
-  const before = scroller.scrollTop;
   if (positioning.mode === "anchor") {
     // A link to a heading that does not exist leaves the reader where they are.
     markdownEl.querySelector(`#${CSS.escape(positioning.anchor)}`)?.scrollIntoView({ block: "start" });
@@ -2872,9 +2892,6 @@ function applyPositioning(scroller: HTMLElement, positioning: Positioning): void
   } else {
     scroller.scrollTop = 0;
   }
-  // Already in place: no scroll event will close the window, so close it now
-  // and the reader's next scroll counts as theirs.
-  if (scroller.scrollTop === before) endProgrammaticScroll();
 }
 
 function endProgrammaticScroll(): void {
@@ -2886,12 +2903,16 @@ function endProgrammaticScroll(): void {
 contentEl.addEventListener("scrollend", endProgrammaticScroll);
 
 // The reader's own input: whatever scroll follows is theirs, even inside the
-// window the app opened for its own scrolls.
+// window the app opened for its own scrolls (which a scroll event alone cannot
+// tell apart: a position already in place fires none, a clamped one fires late).
 const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
 for (const type of ["wheel", "touchstart", "pointerdown"] as const) {
   contentEl.addEventListener(type, endProgrammaticScroll, { passive: true });
 }
 document.addEventListener("keydown", (e) => {
+  // Keys typed in a field (search, dialogs) scroll nothing.
+  const target = e.target as HTMLElement | null;
+  if (target?.closest("input, textarea, select, [contenteditable]") || modalOpen()) return;
   if (SCROLL_KEYS.has(e.key) && activeScreen() === "doc") endProgrammaticScroll();
 });
 
@@ -2932,21 +2953,28 @@ function captureScroll(): number {
   return homeEl.scrollTop;
 }
 
+// The latest open that failed, for the home screen a window falls back to.
+let lastFailedTarget: NavEntry | null = null;
+
 function onNavigationError(error: unknown, target: NavEntry): void {
   console.error("Failed to open:", target, error);
+  lastFailedTarget = target;
   showLoadError(target);
-  // Nothing on screen yet (a startup open that failed, wherever it came from):
-  // show home so the window stays usable. Checked once the navigator has let
-  // go of the failed navigation; another one still loading takes over instead.
-  if (target.kind !== "home") {
-    queueMicrotask(() => {
-      if (nav.state().current || nav.pending() > 0) return;
-      void nav.navigate({ kind: "home", rootPath: null, dir: [] }).then((shown) => {
-        // The home commit cleared the banner: tell the reader why they are here.
-        if (shown) showLoadError(target);
-      });
-    });
-  }
+}
+
+/**
+ * Every open at startup failed or was overtaken by one that failed (a Finder
+ * open of an unreadable file, say): show home so the window stays usable, and
+ * say why. Home does not fail in practice (buildHomeData falls back to empty
+ * data); if it ever did, trying it again would only loop.
+ */
+function onNothingShown(): void {
+  const failed = lastFailedTarget;
+  if (failed?.kind === "home") return;
+  void nav.navigate({ kind: "home", rootPath: null, dir: [] }).then((shown) => {
+    // The home commit cleared the banner: tell the reader why they are here.
+    if (shown && failed) showLoadError(failed);
+  });
 }
 
 function showLoadError(target: NavEntry): void {
@@ -2980,6 +3008,7 @@ const nav: WindowNavigator = createNavigator<Prepared, Built>({
   captureScroll,
   decorate,
   onError: onNavigationError,
+  onNothingShown,
 });
 
 function syncNavButtons(): void {
@@ -3008,7 +3037,11 @@ function syncNavMenu(current: NavEntry | null, canBack: boolean, canForward: boo
   const key = JSON.stringify(menuState);
   if (key === navMenuKey) return;
   navMenuKey = key;
-  void invoke("set_nav_menu_state", { state: menuState }).catch((e) => console.warn("Go menu not updated:", e));
+  void invoke("set_nav_menu_state", { state: menuState }).catch((e) => {
+    console.warn("Go menu not updated:", e);
+    // Send the same state again next time.
+    if (navMenuKey === key) navMenuKey = "";
+  });
 }
 
 // Data the home screen on display was built from: refreshing only when it
@@ -3103,7 +3136,8 @@ function resolveImagePaths(container: HTMLElement, filePath: string): void {
   for (const img of container.querySelectorAll("img")) {
     const src = img.getAttribute("src");
     if (src && isRelativePath(src)) {
-      const absolutePath = `${dirPath}/${src}`;
+      // Decoded like links: `My%20Pic.png` names the file `My Pic.png`.
+      const absolutePath = `${dirPath}/${decodePathPart(src)}`;
       img.src = convertFileSrc(absolutePath);
     }
   }

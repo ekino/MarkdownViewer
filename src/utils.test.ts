@@ -6,6 +6,7 @@ import {
   filterAndSortEntries,
   classifyLink,
   parseMarkdownHref,
+  decodePathPart,
   parentLabel,
   tildePath,
   findReadme,
@@ -104,6 +105,10 @@ describe("tildePath and parentLabel", () => {
     expect(parentLabel("/Users/me/dev/mdv")).toBe("~/dev");
     expect(parentLabel("/Users/me/dev/mdv/")).toBe("~/dev");
     expect(parentLabel("/Volumes/Docs")).toBe("/Volumes");
+  });
+
+  it("gives nothing for the volume root", () => {
+    expect(parentLabel("/")).toBe("");
   });
 });
 
@@ -215,6 +220,11 @@ describe("parseMarkdownHref", () => {
 
   it("keeps a file part with a malformed escape as written", () => {
     expect(parseMarkdownHref("100%.md").filePart).toBe("100%.md");
+  });
+
+  it("decodes image paths the same way", () => {
+    expect(decodePathPart("img/My%20Pic.png")).toBe("img/My Pic.png");
+    expect(decodePathPart("100%.png")).toBe("100%.png");
   });
 
   it("parses a simple markdown link", () => {

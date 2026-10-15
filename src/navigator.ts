@@ -60,6 +60,11 @@ export interface NavigatorDeps<P, B> {
   decorate(ctx: DecorationContext): Promise<void>;
   /** A navigation failed (document unreadable…): the current view stays as it is. */
   onError(error: unknown, target: NavEntry): void;
+  /**
+   * Nothing is on screen and nothing is loading any more: every navigation so
+   * far failed or was overtaken by one that failed. The window needs a view.
+   */
+  onNothingShown?(): void;
 }
 
 export interface NavigateOptions {
@@ -251,6 +256,7 @@ export function createNavigator<P, B>(deps: NavigatorDeps<P, B>): Navigator {
     } finally {
       inFlight -= 1;
       if (pendingTraverse && pendingTraverse.gen === gen) pendingTraverse = null;
+      if (inFlight === 0 && index < 0) deps.onNothingShown?.();
     }
   }
 

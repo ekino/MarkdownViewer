@@ -42,7 +42,7 @@ function harness() {
   const errors: string[] = [];
   const decorations: DecorationContext[] = [];
   let scroll = 0;
-  let afterError: () => void = () => {};
+  let nothingShown = 0;
   let decorate: (ctx: DecorationContext) => Promise<void> = async (ctx) => {
     decorations.push(ctx);
   };
@@ -66,7 +66,9 @@ function harness() {
     decorate: (ctx) => decorate(ctx),
     onError(_e, target) {
       errors.push(key(target));
-      afterError();
+    },
+    onNothingShown() {
+      nothingShown += 1;
     },
   });
 
@@ -82,9 +84,7 @@ function harness() {
     setDecorate: (fn: (ctx: DecorationContext) => Promise<void>) => {
       decorate = fn;
     },
-    setAfterError: (fn: () => void) => {
-      afterError = fn;
-    },
+    nothingShown: () => nothingShown,
     /** Resolve the pending prepare of `entry` with `content` (defaults to its key). */
     async finish(entry: NavEntry, content?: string) {
       preparing.get(key(entry))!.resolve(content ?? key(entry));
@@ -448,20 +448,39 @@ describe("createNavigator", () => {
     expect(done).toHaveBeenCalled();
   });
 
-  it("a startup open that failed has let go by the next microtask: the window can fall back", async () => {
-    // main.ts shows home from a microtask queued in onError when nothing is on
-    // screen and nothing else loads: both must already hold at that point.
+  it("says nothing is shown once a startup open that overtook the startup view fails", async () => {
     const h = harness();
     const commitInitial = h.nav.reserveInitial();
-    const opened = h.nav.navigate(doc("a.md")); // a Finder open overtakes the startup view
     const initial = commitInitial(home());
-    const seen: { current: unknown; pending: number }[] = [];
-    h.setAfterError(() => queueMicrotask(() => seen.push({ current: h.nav.state().current, pending: h.nav.pending() })));
-    await h.finish(home());
+    const opened = h.nav.navigate(doc("a.md")); // a Finder open overtakes the startup view
+    await h.finish(home()); // the startup view lands first, stale
+    expect(h.nothingShown()).toBe(0); // the open still loads
     await h.fail(doc("a.md"));
     expect(await initial).toBe(false);
     expect(await opened).toBe(false);
-    expect(seen).toEqual([{ current: null, pending: 0 }]);
+    expect(h.nothingShown()).toBe(1);
+  });
+
+  it("…in the other order too: the open fails while the startup view still loads", async () => {
+    const h = harness();
+    const commitInitial = h.nav.reserveInitial();
+    const initial = commitInitial(home());
+    const opened = h.nav.navigate(doc("a.md"));
+    await h.fail(doc("a.md"));
+    expect(h.nothingShown()).toBe(0); // the startup view still loads
+    await h.finish(home());
+    expect(await initial).toBe(false);
+    expect(await opened).toBe(false);
+    expect(h.nothingShown()).toBe(1);
+  });
+
+  it("never says nothing is shown once a view is on screen", async () => {
+    const h = harness();
+    await start(h, doc("a.md"));
+    const b = h.nav.navigate(doc("b.md"));
+    await h.fail(doc("b.md"));
+    await b;
+    expect(h.nothingShown()).toBe(0);
   });
 
   it("re-asking for the view on screen cancels a load in progress", async () => {

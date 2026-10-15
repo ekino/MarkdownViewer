@@ -44,6 +44,8 @@ export function tildePath(path: string): string {
 /** Where a file or folder sits, written short: `/Users/me/dev/mdv` → `~/dev`. */
 export function parentLabel(path: string): string {
   const parts = path.split("/").filter(Boolean);
+  // The volume root sits nowhere: its name says it all.
+  if (parts.length === 0) return "";
   parts.pop();
   return tildePath("/" + parts.join("/"));
 }
@@ -142,11 +144,11 @@ export function parseMarkdownHref(
   href: string
 ): { filePart: string; anchor: string | undefined } {
   const [rawFile, rawAnchor] = href.split("#");
-  return { filePart: decodeOrRaw(rawFile), anchor: decodeAnchor(rawAnchor) };
+  return { filePart: decodePathPart(rawFile), anchor: decodeAnchor(rawAnchor) };
 }
 
-/** A malformed escape (`100%.md`) is used as written. */
-function decodeOrRaw(raw: string): string {
+/** A percent-encoded path, decoded; a malformed escape (`100%.md`) is used as written. */
+export function decodePathPart(raw: string): string {
   try {
     return decodeURIComponent(raw);
   } catch {
@@ -157,7 +159,7 @@ function decodeOrRaw(raw: string): string {
 /** `#` alone means no anchor; an undecodable fragment is used as written. */
 export function decodeAnchor(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
-  return decodeOrRaw(raw);
+  return decodePathPart(raw);
 }
 
 /**
