@@ -284,11 +284,17 @@ systemDarkMQ.addEventListener("change", () => {
  * every setting falls back to its default and startup goes on in a consistent
  * state (an empty window, or half-applied settings, would be worse).
  */
-async function startupSettings(): Promise<{ get(key: string): Promise<unknown> }> {
+async function startupSettings(): Promise<{
+  get(key: string): Promise<unknown>;
+  /** Every read so far succeeded: an unset value really is unset, not unread. */
+  allRead(): boolean;
+}> {
+  let failed = false;
   let store: Awaited<ReturnType<typeof load>> | null = null;
   try {
     store = await load(STORE_FILE);
   } catch (e) {
+    failed = true;
     console.warn("Settings unreadable, using the defaults:", e);
   }
   return {
@@ -297,10 +303,12 @@ async function startupSettings(): Promise<{ get(key: string): Promise<unknown> }
       try {
         return await store.get(key);
       } catch (e) {
+        failed = true;
         console.warn(`Setting ${key} unreadable, using its default:`, e);
         return undefined;
       }
     },
+    allRead: () => !failed,
   };
 }
 
@@ -347,7 +355,9 @@ async function initTheme(): Promise<void> {
     { [DAY_THEME_KEY]: savedDay, [NIGHT_THEME_KEY]: savedNight },
     { [DAY_THEME_KEY]: followThemes.day, [NIGHT_THEME_KEY]: followThemes.night }
   );
-  if (Object.keys(derived).length > 0) {
+  // Only from settings actually read: a slot that could not be read is not
+  // missing, and writing a derived one would overwrite the reader's choice.
+  if (Object.keys(derived).length > 0 && store.allRead()) {
     // Only the slot that was missing or invalid, best effort: a store that
     // cannot be written must not stop startup (retried with the next save).
     void writeThemeSettings(derived);
