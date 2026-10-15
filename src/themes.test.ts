@@ -13,6 +13,7 @@ import {
   resolveActiveThemeId,
   resolveDisplayedThemeId,
   resolveFollowThemes,
+  slotsToMigrate,
   resolveInitialThemeId,
   sanitizeCustomThemes,
   VALID_THEME_ID_RE,
@@ -536,5 +537,27 @@ describe("day and night themes", () => {
   it("falls back to the fixed theme's pair when a slot no longer fits", () => {
     const slots = { day: "github", night: "light" };
     expect(resolveDisplayedThemeId(catalog, "light", true, slots, true)).toBe("dark");
+  });
+});
+
+describe("slotsToMigrate", () => {
+  const follow = { day: "sepia", night: "nord" };
+
+  it("saves the slots missing from settings older than them", () => {
+    expect(slotsToMigrate({ themeId: "sepia", appearance: undefined, day: undefined, night: undefined }, follow)).toEqual({
+      dayThemeId: "sepia",
+      nightThemeId: "nord",
+    });
+    expect(slotsToMigrate({ themeId: undefined, appearance: "dark", day: "light", night: undefined }, follow)).toEqual({
+      nightThemeId: "nord",
+    });
+  });
+
+  it("never rewrites a saved slot, even one whose theme is unknown right now", () => {
+    expect(slotsToMigrate({ themeId: "sepia", appearance: undefined, day: "my-theme", night: "gone" }, follow)).toEqual({});
+  });
+
+  it("writes nothing with no theme saved (first launch, or a store read as empty)", () => {
+    expect(slotsToMigrate({ themeId: undefined, appearance: undefined, day: undefined, night: undefined }, follow)).toEqual({});
   });
 });

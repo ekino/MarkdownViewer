@@ -52,7 +52,6 @@ import {
   resolveInitialLaunchPref,
   resolveInitialFontWeight,
   resolveInitialOutlinePref,
-  changedSettings,
   setSegmentActive,
   settingsToWrite,
   settleWrite,
@@ -78,6 +77,7 @@ import {
   parseTheme,
   resolveDisplayedThemeId,
   resolveFollowThemes,
+  slotsToMigrate,
   resolveInitialThemeId,
   type FollowThemes,
   sanitizeCustomThemes,
@@ -348,19 +348,15 @@ async function initTheme(): Promise<void> {
     savedDay,
     savedNight
   );
-  // Settings from before the day/night slots (or a slot whose theme is gone):
-  // write the derived pair now, so it no longer depends on the fixed theme,
-  // which changes as soon as the reader turns "follow macOS" off.
-  const derived = changedSettings(
-    { [DAY_THEME_KEY]: savedDay, [NIGHT_THEME_KEY]: savedNight },
-    { [DAY_THEME_KEY]: followThemes.day, [NIGHT_THEME_KEY]: followThemes.night }
+  // Settings from before the day/night slots: save the derived pair, best
+  // effort (a store that cannot be written must not stop startup). Only from
+  // settings actually read: a slot that could not be read is not missing.
+  const migrated = slotsToMigrate(
+    { themeId: savedThemeId, appearance: savedAppearance, day: savedDay, night: savedNight },
+    followThemes
   );
-  // Only from settings actually read: a slot that could not be read is not
-  // missing, and writing a derived one would overwrite the reader's choice.
-  if (Object.keys(derived).length > 0 && store.allRead()) {
-    // Only the slot that was missing or invalid, best effort: a store that
-    // cannot be written must not stop startup (retried with the next save).
-    void writeThemeSettings(derived);
+  if (Object.keys(migrated).length > 0 && store.allRead()) {
+    void writeThemeSettings(migrated);
   }
   currentBodyFont = resolveInitialFontFamily(await store.get(BODY_FONT_KEY));
   currentCodeFont = resolveInitialFontFamily(await store.get(CODE_FONT_KEY));
