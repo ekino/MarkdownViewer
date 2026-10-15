@@ -2237,9 +2237,17 @@ function initChrome(): void {
 
 async function init(): Promise<void> {
   // 1. Preferences that decide where opens go, before anything can open.
-  const routingStore = await load(STORE_FILE);
-  finderOpenPref = resolveInitialFinderOpenPref(await routingStore.get(FINDER_OPEN_KEY));
-  launchPref = resolveInitialLaunchPref(await routingStore.get(LAUNCH_KEY));
+  // Nothing before the startup view may stop init: the window would stay empty.
+  // An unreadable store means the defaults.
+  try {
+    const routingStore = await load(STORE_FILE);
+    finderOpenPref = resolveInitialFinderOpenPref(await routingStore.get(FINDER_OPEN_KEY));
+    launchPref = resolveInitialLaunchPref(await routingStore.get(LAUNCH_KEY));
+  } catch (e) {
+    console.warn("Settings unreadable, using the defaults:", e);
+    finderOpenPref = resolveInitialFinderOpenPref(undefined);
+    launchPref = resolveInitialLaunchPref(undefined);
+  }
 
   // 2. Reserve the startup view: anything opened from now on wins over it.
   const commitInitial = nav.reserveInitial();
@@ -2282,21 +2290,25 @@ async function init(): Promise<void> {
     }),
   ]);
 
-  // 4. The rest of the window.
-  await initLocale();
-  await initTheme();
+  // 4. The rest of the window. Language and theme read the settings: if they
+  // cannot, the window keeps its built-in defaults rather than staying empty.
+  await initLocale().catch((e) => console.warn("Language not restored:", e));
+  await initTheme().catch((e) => console.warn("Theme not restored:", e));
   initSearch();
   initPreferences();
   initChrome();
 
   // Populate the native "Open Recent" submenu from the persisted list.
-  await syncRecentMenu(await loadRecents());
+  await loadRecents()
+    .then(syncRecentMenu)
+    .catch((e) => console.warn("Open Recent not filled:", e));
 
   // 5. The startup view. Pull anything the backend buffered for *this* window:
   // a CLI arg, a RunEvent::Opened that fired before our listener was
   // registered, or the folder handed to a window spawned from the File menu.
   const pending = await invoke<PendingOpen | null>("get_pending_open");
-  const view = resolveInitialView(pending, await loadRootPath(), launchPref === "last-folder");
+  const lastFolder = await loadRootPath().catch((e) => (console.warn("Last folder unreadable:", e), null));
+  const view = resolveInitialView(pending, lastFolder, launchPref === "last-folder");
   let target: NavEntry = { kind: "home", rootPath: null, dir: [] };
   let savedStatus = "dir";
   if (view.kind === "file") {
@@ -2519,12 +2531,17 @@ function activeScreen(): Screen {
 
 let currentDocTitle = "";
 
-async function buildHomeData(keptRoot: string | null): Promise<HomeData> {
-  // Home is where a window falls back when nothing else opens: it must not fail.
-  // An unreadable store shows an empty home rather than nothing.
+/**
+ * `tolerant`: home is where a window falls back when nothing else opens, so
+ * opening it must not fail — an unreadable store gives an empty home. A refresh
+ * of a home already on screen is not tolerant: it keeps what is shown instead.
+ */
+async function buildHomeData(keptRoot: string | null, tolerant: boolean): Promise<HomeData> {
+  const orEmpty = <T>(read: Promise<T>, empty: T, what: string): Promise<T> =>
+    tolerant ? read.catch((e) => (console.warn(`${what} unreadable:`, e), empty)) : read;
   const [recents, lastRead] = await Promise.all([
-    loadRecents().catch((e) => (console.warn("Recents unreadable:", e), [] as RecentEntry[])),
-    loadLastRead().catch((e) => (console.warn("Last read unreadable:", e), null)),
+    orEmpty(loadRecents(), [] as RecentEntry[], "Recents"),
+    orEmpty(loadLastRead(), null, "Last read"),
   ]);
   // Both checks at once, and bounded: the home screen must not wait on a slow
   // volume. A path that did not answer in time is offered as is; opening it
@@ -2557,7 +2574,7 @@ async function buildHomeData(keptRoot: string | null): Promise<HomeData> {
 
 async function prepare(target: NavEntry, _stale: () => boolean, options: { reload: boolean }): Promise<Prepared> {
   if (target.kind === "home") {
-    return { kind: "home", home: await buildHomeData(target.rootPath) };
+    return { kind: "home", home: await buildHomeData(target.rootPath, true) };
   }
   const root = target.rootPath!;
   if (target.kind === "folder") {
@@ -2911,8 +2928,11 @@ for (const type of ["wheel", "touchstart", "pointerdown"] as const) {
 }
 document.addEventListener("keydown", (e) => {
   // Keys typed in a field (search, dialogs) scroll nothing.
+  // Space on a button or link presses it.
   const target = e.target as HTMLElement | null;
-  if (target?.closest("input, textarea, select, [contenteditable]") || modalOpen()) return;
+  const field = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])';
+  if (target?.closest(field) || modalOpen()) return;
+  if (e.key === " " && target?.closest("button, a[href]")) return;
   if (SCROLL_KEYS.has(e.key) && activeScreen() === "doc") endProgrammaticScroll();
 });
 
@@ -3055,7 +3075,13 @@ async function refreshHome(): Promise<void> {
   if (current?.kind !== "home") return;
   const token = viewToken;
   const seq = ++homeRefreshSeq;
-  const data = await buildHomeData(current.rootPath);
+  let data: HomeData;
+  try {
+    data = await buildHomeData(current.rootPath, false);
+  } catch (e) {
+    console.warn("Home not refreshed:", e);
+    return;
+  }
   // Another view was committed meanwhile (closing the folder, opening one…),
   // or a later refresh started: only the latest lands.
   if (token !== viewToken || seq !== homeRefreshSeq) return;
