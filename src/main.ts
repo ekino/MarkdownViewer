@@ -78,6 +78,7 @@ import {
   resolveDisplayedThemeId,
   resolveFollowThemes,
   slotsToMigrate,
+  missingSlots,
   resolveInitialThemeId,
   type FollowThemes,
   sanitizeCustomThemes,
@@ -200,9 +201,23 @@ const unsavedThemeKeys = new Set<string>();
 // Day/night slots known to be in the settings (read at startup or written
 // since). A slot not there yet is derived from the fixed theme, which changes
 // as soon as the reader picks another one: the next theme save writes it as
-// it is now, so it stops moving. Known limit: if another window saved that
-// slot since this one started, this first write replaces it.
+// it is now, so it stops moving. The settings are read again first: another
+// window may have saved that slot since this one started, or startup may have
+// failed to read it.
 const savedSlotKeys = new Set<string>();
+
+/** The slots still absent from the settings, read now; none if they cannot be read. */
+async function slotsMissingFromSettings(): Promise<string[]> {
+  try {
+    return await missingSlots(savedSlotKeys, async () => {
+      const store = await load(STORE_FILE);
+      return (key) => store.get(key);
+    });
+  } catch (e) {
+    console.warn("Theme slots unreadable, not saving them:", e);
+    return [];
+  }
+}
 
 /** Write theme settings; on failure, remember their keys for the next save. */
 async function writeThemeSettings(
@@ -233,8 +248,9 @@ async function saveThemeChoices(
   forced: Record<string, unknown> = {}
 ): Promise<void> {
   const unsavedSlots: Record<string, ThemeId> = {};
-  if (!savedSlotKeys.has(DAY_THEME_KEY)) unsavedSlots[DAY_THEME_KEY] = followThemes.day;
-  if (!savedSlotKeys.has(NIGHT_THEME_KEY)) unsavedSlots[NIGHT_THEME_KEY] = followThemes.night;
+  for (const key of await slotsMissingFromSettings()) {
+    unsavedSlots[key] = key === DAY_THEME_KEY ? followThemes.day : followThemes.night;
+  }
   const entries = settingsToWrite(
     themeChoices(),
     before,
@@ -303,8 +319,9 @@ async function startupSettings(): Promise<{
   get(key: string): Promise<unknown>;
   /**
    * No load or read failed so far. A weak guarantee: the store plugin reads a
-   * settings file it cannot parse as empty, without failing. What keeps such
-   * settings safe at startup is that empty settings are never migrated.
+   * settings file it cannot parse as empty, without failing. Startup writes
+   * nothing over such settings, since empty settings are never migrated; the
+   * plugin itself still saves over them (on quit, or with any later save).
    */
   allRead(): boolean;
 }> {
@@ -769,8 +786,8 @@ const RECENT_MAX = 10;
 // Two windows can still interleave, as the store has no compare-and-set: if
 // window A closes folder X while window B saves folder Y, A may read X, then B
 // write Y, then A delete it. The next launch then shows the home screen instead
-// of Y. Accepted: it takes two windows writing within a few milliseconds, and
-// costs one reopening.
+// of Y. Accepted: it takes two windows writing close together (the gap is a
+// few IPC round trips), and costs one reopening from the recent items.
 let rootPathWrites: Promise<void> = Promise.resolve();
 
 function queueRootPathWrite(write: () => Promise<void>): Promise<void> {
@@ -2369,8 +2386,9 @@ async function init(): Promise<void> {
     // "denied" or "error" still opens it: the folder view says what is wrong.
     const fromSaved = pending?.kind !== "folder";
     // Bounded like the home screen's checks: a network volume that does not
-    // answer must not hold the window empty. "unknown" opens the folder, whose
-    // view then says what is wrong.
+    // answer must not hold startup on this check. "unknown" opens the folder
+    // (its listing is not bounded: the window shows it loading, and its menus
+    // and Home stay usable).
     savedStatus = fromSaved ? await pathStatus(view.path, PATH_STATUS_TIMEOUT) : "dir";
     if (savedStatus !== "missing" && savedStatus !== "file" && savedStatus !== "other") {
       target = { kind: "folder", rootPath: view.path, dir: [] };

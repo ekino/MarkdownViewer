@@ -232,6 +232,26 @@ export function slotsToMigrate(
 }
 
 /**
+ * The day/night slots absent from the settings. Slots in `saved` are known to
+ * be there; the others are read now, and those found are added to `saved`.
+ * Reading is only opened when a slot is unknown.
+ */
+export async function missingSlots(
+  saved: Set<string>,
+  open: () => Promise<(key: string) => Promise<unknown>>
+): Promise<string[]> {
+  const unknown = [DAY_THEME_KEY, NIGHT_THEME_KEY].filter((k) => !saved.has(k));
+  if (unknown.length === 0) return [];
+  const get = await open();
+  const missing: string[] = [];
+  for (const key of unknown) {
+    if ((await get(key)) === undefined) missing.push(key);
+    else saved.add(key);
+  }
+  return missing;
+}
+
+/**
  * The light and dark themes used while following macOS. A saved choice wins
  * when it still exists and has the right appearance; otherwise the slot is
  * derived from the fixed theme (itself or its pair), then the builtins.

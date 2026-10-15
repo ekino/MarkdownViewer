@@ -14,6 +14,7 @@ import {
   resolveDisplayedThemeId,
   resolveFollowThemes,
   slotsToMigrate,
+  missingSlots,
   resolveInitialThemeId,
   sanitizeCustomThemes,
   VALID_THEME_ID_RE,
@@ -570,5 +571,41 @@ describe("slotsToMigrate", () => {
 
   it("writes nothing with no theme saved (first launch, or a store read as empty)", () => {
     expect(slotsToMigrate(catalog, saved(undefined, undefined, undefined, undefined), follow)).toEqual({});
+  });
+});
+
+describe("missingSlots", () => {
+  const reader = (values: Record<string, unknown>) => {
+    const opened = { count: 0 };
+    const open = async () => {
+      opened.count += 1;
+      return async (key: string) => values[key];
+    };
+    return { open, opened };
+  };
+
+  it("returns the slots absent from the settings", async () => {
+    const { open } = reader({});
+    expect(await missingSlots(new Set(), open)).toEqual(["dayThemeId", "nightThemeId"]);
+  });
+
+  it("does not return a slot another window saved meanwhile, and remembers it", async () => {
+    const saved = new Set<string>();
+    const { open } = reader({ dayThemeId: "sepia" });
+    expect(await missingSlots(saved, open)).toEqual(["nightThemeId"]);
+    expect(saved.has("dayThemeId")).toBe(true);
+  });
+
+  it("does not read the settings once both slots are known", async () => {
+    const { open, opened } = reader({});
+    expect(await missingSlots(new Set(["dayThemeId", "nightThemeId"]), open)).toEqual([]);
+    expect(opened.count).toBe(0);
+  });
+
+  it("fails when the settings cannot be read, so nothing is forced", async () => {
+    const open = async (): Promise<(key: string) => Promise<unknown>> => {
+      throw new Error("unreadable");
+    };
+    await expect(missingSlots(new Set(), open)).rejects.toThrow("unreadable");
   });
 });
