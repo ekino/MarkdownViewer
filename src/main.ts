@@ -201,23 +201,10 @@ const unsavedThemeKeys = new Set<string>();
 // Day/night slots known to be in the settings (read at startup or written
 // since). A slot not there yet is derived from the fixed theme, which changes
 // as soon as the reader picks another one: the next theme save writes it as
-// it is now, so it stops moving. The settings are read again first: another
-// window may have saved that slot since this one started, or startup may have
-// failed to read it.
+// it is now, so it stops moving. That save reads the settings again first, in
+// the write queue: another window may have saved the slot since this one
+// started, or startup may have failed to read it.
 const savedSlotKeys = new Set<string>();
-
-/** The slots still absent from the settings, read now; none if they cannot be read. */
-async function slotsMissingFromSettings(): Promise<string[]> {
-  try {
-    return await missingSlots(savedSlotKeys, async () => {
-      const store = await load(STORE_FILE);
-      return (key) => store.get(key);
-    });
-  } catch (e) {
-    console.warn("Theme slots unreadable, not saving them:", e);
-    return [];
-  }
-}
 
 /** Write theme settings; on failure, remember their keys for the next save. */
 async function writeThemeSettings(
@@ -239,26 +226,42 @@ async function writeThemeSettings(
 
 /**
  * Write the theme settings that changed since `before`, plus `forced` (what
- * the reader just chose), plus any whose last write failed, in one save.
- * Nothing else: another window may have chosen the other slot meanwhile,
- * and rewriting it from this window's memory would undo that.
+ * the reader just chose), plus any whose last write failed, plus the slots
+ * still absent from the settings, in one save. Nothing else: another window
+ * may have chosen the other slot meanwhile, and rewriting it from this
+ * window's memory would undo that.
+ *
+ * The values are taken now, and the settings read in the write queue, so
+ * saves land in the order the reader made the choices. If the settings
+ * cannot be read, nothing is written: a fixed theme saved without the slot
+ * derived from the previous one would show, next launch, a slot the reader
+ * never chose. The keys are retried with the next theme save.
  */
 async function saveThemeChoices(
   before: ThemeChoices,
   forced: Record<string, unknown> = {}
 ): Promise<void> {
-  const unsavedSlots: Record<string, ThemeId> = {};
-  for (const key of await slotsMissingFromSettings()) {
-    unsavedSlots[key] = key === DAY_THEME_KEY ? followThemes.day : followThemes.night;
+  const now = themeChoices();
+  let entries: Record<string, unknown>;
+  let ok = true;
+  try {
+    entries = await savePrefsReading(async (get) => {
+      const slots: Record<string, unknown> = {};
+      for (const key of await missingSlots(savedSlotKeys, async () => get)) {
+        slots[key] = now[key];
+      }
+      return settingsToWrite(now, before, { ...slots, ...forced }, unsavedThemeKeys);
+    });
+  } catch {
+    ok = false;
+    entries = settingsToWrite(now, before, forced, unsavedThemeKeys);
   }
-  const entries = settingsToWrite(
-    themeChoices(),
-    before,
-    { ...unsavedSlots, ...forced },
-    unsavedThemeKeys
-  );
-  if (Object.keys(entries).length === 0) return;
-  await writeThemeSettings(entries);
+  settleWrite(unsavedThemeKeys, entries, ok);
+  if (ok) {
+    for (const key of [DAY_THEME_KEY, NIGHT_THEME_KEY]) {
+      if (key in entries) savedSlotKeys.add(key);
+    }
+  }
 }
 
 /** Choose a theme: it fills its light or dark slot, and is shown unless following macOS. */
@@ -1781,14 +1784,31 @@ let prefsWrites: Promise<void> = Promise.resolve();
 
 /** Several settings that belong together, written in one save. */
 function savePrefs(entries: Record<string, unknown>): Promise<void> {
+  return savePrefsReading(async () => entries).then(() => {});
+}
+
+/**
+ * Like savePrefs, for settings that depend on what the store holds: `compute`
+ * reads it at its turn in the queue, and returns what to write (nothing when
+ * empty). Resolves with what was written.
+ */
+function savePrefsReading(
+  compute: (get: (key: string) => Promise<unknown>) => Promise<Record<string, unknown>>
+): Promise<Record<string, unknown>> {
   const write = prefsWrites.then(async () => {
     const store = await load(STORE_FILE);
+    const entries = await compute((key) => store.get(key));
+    if (Object.keys(entries).length === 0) return entries;
     for (const [key, value] of Object.entries(entries)) {
       await store.set(key, value);
     }
     await store.save();
+    return entries;
   });
-  prefsWrites = write.catch((e) => console.warn("Failed to save settings:", e));
+  prefsWrites = write.then(
+    () => {},
+    (e) => console.warn("Failed to save settings:", e)
+  );
   return write;
 }
 
