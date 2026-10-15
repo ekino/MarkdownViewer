@@ -279,8 +279,33 @@ systemDarkMQ.addEventListener("change", () => {
   }
 });
 
+/**
+ * Reads settings at startup. An unreadable store or value reads as unset, so
+ * every setting falls back to its default and startup goes on in a consistent
+ * state (an empty window, or half-applied settings, would be worse).
+ */
+async function startupSettings(): Promise<{ get(key: string): Promise<unknown> }> {
+  let store: Awaited<ReturnType<typeof load>> | null = null;
+  try {
+    store = await load(STORE_FILE);
+  } catch (e) {
+    console.warn("Settings unreadable, using the defaults:", e);
+  }
+  return {
+    async get(key) {
+      if (!store) return undefined;
+      try {
+        return await store.get(key);
+      } catch (e) {
+        console.warn(`Setting ${key} unreadable, using its default:`, e);
+        return undefined;
+      }
+    },
+  };
+}
+
 async function initTheme(): Promise<void> {
-  const store = await load(STORE_FILE);
+  const store = await startupSettings();
   const savedThemeId = await store.get(THEME_KEY);
   const savedAppearance = await store.get(APPEARANCE_KEY);
   const savedFollow = await store.get(FOLLOW_SYSTEM_KEY);
@@ -1978,7 +2003,7 @@ function initPreferences(): void {
 }
 
 async function initLocale(): Promise<void> {
-  const store = await load(STORE_FILE);
+  const store = await startupSettings();
   const saved = await store.get(LOCALE_KEY);
   const locale = resolveInitialLocale(saved, navigator.language);
   setLocale(locale);
@@ -2237,17 +2262,11 @@ function initChrome(): void {
 
 async function init(): Promise<void> {
   // 1. Preferences that decide where opens go, before anything can open.
-  // Nothing before the startup view may stop init: the window would stay empty.
-  // An unreadable store means the defaults.
-  try {
-    const routingStore = await load(STORE_FILE);
-    finderOpenPref = resolveInitialFinderOpenPref(await routingStore.get(FINDER_OPEN_KEY));
-    launchPref = resolveInitialLaunchPref(await routingStore.get(LAUNCH_KEY));
-  } catch (e) {
-    console.warn("Settings unreadable, using the defaults:", e);
-    finderOpenPref = resolveInitialFinderOpenPref(undefined);
-    launchPref = resolveInitialLaunchPref(undefined);
-  }
+  // Nothing before the startup view may stop init (the window would stay
+  // empty): settings that cannot be read take their defaults.
+  const routingStore = await startupSettings();
+  finderOpenPref = resolveInitialFinderOpenPref(await routingStore.get(FINDER_OPEN_KEY));
+  launchPref = resolveInitialLaunchPref(await routingStore.get(LAUNCH_KEY));
 
   // 2. Reserve the startup view: anything opened from now on wins over it.
   const commitInitial = nav.reserveInitial();
@@ -2290,10 +2309,9 @@ async function init(): Promise<void> {
     }),
   ]);
 
-  // 4. The rest of the window. Language and theme read the settings: if they
-  // cannot, the window keeps its built-in defaults rather than staying empty.
-  await initLocale().catch((e) => console.warn("Language not restored:", e));
-  await initTheme().catch((e) => console.warn("Theme not restored:", e));
+  // 4. The rest of the window.
+  await initLocale();
+  await initTheme();
   initSearch();
   initPreferences();
   initChrome();
@@ -2657,6 +2675,7 @@ function build(p: Prepared, ctx: CommitContext): Built {
   const target = ctx.target;
   if (p.kind === "home") {
     homeDataKey = JSON.stringify(p.home);
+    shownHomeData = p.home;
     return {
       kind: "home",
       node: buildHome(p.home, {
@@ -2928,11 +2947,11 @@ for (const type of ["wheel", "touchstart", "pointerdown"] as const) {
 }
 document.addEventListener("keydown", (e) => {
   // Keys typed in a field (search, dialogs) scroll nothing.
-  // Space on a button or link presses it.
+  // Space on a button presses it (on a link, it scrolls).
   const target = e.target as HTMLElement | null;
   const field = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])';
   if (target?.closest(field) || modalOpen()) return;
-  if (e.key === " " && target?.closest("button, a[href]")) return;
+  if (e.key === " " && target?.closest("button")) return;
   if (SCROLL_KEYS.has(e.key) && activeScreen() === "doc") endProgrammaticScroll();
 });
 
@@ -3068,6 +3087,7 @@ function syncNavMenu(current: NavEntry | null, canBack: boolean, canForward: boo
 // changed keeps a click that activates the window from landing on a node that
 // is being replaced.
 let homeDataKey = "";
+let shownHomeData: HomeData | null = null;
 let homeRefreshSeq = 0;
 
 async function refreshHome(): Promise<void> {
@@ -3087,12 +3107,16 @@ async function refreshHome(): Promise<void> {
   if (token !== viewToken || seq !== homeRefreshSeq) return;
   const key = JSON.stringify(data);
   if (key === homeDataKey) return;
-  homeDataKey = key;
-  if (nav.state().current !== null && activeScreen() === "home") {
-    const ctx: CommitContext = { target: current, positioning: { mode: "top" }, traversal: false, viewGen: 0 };
-    const built = build({ kind: "home", home: data }, ctx);
-    if (built.kind === "home") homeEl.replaceChildren(built.node);
-  }
+  rebuildHome(current, data);
+}
+
+/** Replace the home on display with one built from `data`, in place. */
+function rebuildHome(current: NavEntry, data: HomeData): void {
+  if (nav.state().current === null || activeScreen() !== "home") return;
+  const ctx: CommitContext = { target: current, positioning: { mode: "top" }, traversal: false, viewGen: 0 };
+  // build() records the data shown (homeDataKey, shownHomeData).
+  const built = build({ kind: "home", home: data }, ctx);
+  if (built.kind === "home") homeEl.replaceChildren(built.node);
 }
 
 /**
@@ -3103,8 +3127,7 @@ function relabelScreen(): void {
   const current = nav.state().current;
   if (!current) return;
   if (current.kind === "home") {
-    homeDataKey = "";
-    void refreshHome();
+    if (shownHomeData) rebuildHome(current, shownHomeData);
     return;
   }
   if (!rootPath || !committedListing) return;
