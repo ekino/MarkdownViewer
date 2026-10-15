@@ -197,6 +197,13 @@ function themeChoices(): ThemeChoices {
 // elsewhere.
 const unsavedThemeKeys = new Set<string>();
 
+// Day/night slots known to be in the settings (read at startup or written
+// since). A slot not there yet is derived from the fixed theme, which changes
+// as soon as the reader picks another one: the next theme save writes it as
+// it is now, so it stops moving. Known limit: if another window saved that
+// slot since this one started, this first write replaces it.
+const savedSlotKeys = new Set<string>();
+
 /** Write theme settings; on failure, remember their keys for the next save. */
 async function writeThemeSettings(
   entries: Record<string, unknown>
@@ -208,6 +215,11 @@ async function writeThemeSettings(
     ok = false;
   }
   settleWrite(unsavedThemeKeys, entries, ok);
+  if (ok) {
+    for (const key of [DAY_THEME_KEY, NIGHT_THEME_KEY]) {
+      if (key in entries) savedSlotKeys.add(key);
+    }
+  }
 }
 
 /**
@@ -220,10 +232,13 @@ async function saveThemeChoices(
   before: ThemeChoices,
   forced: Record<string, unknown> = {}
 ): Promise<void> {
+  const unsavedSlots: Record<string, ThemeId> = {};
+  if (!savedSlotKeys.has(DAY_THEME_KEY)) unsavedSlots[DAY_THEME_KEY] = followThemes.day;
+  if (!savedSlotKeys.has(NIGHT_THEME_KEY)) unsavedSlots[NIGHT_THEME_KEY] = followThemes.night;
   const entries = settingsToWrite(
     themeChoices(),
     before,
-    forced,
+    { ...unsavedSlots, ...forced },
     unsavedThemeKeys
   );
   if (Object.keys(entries).length === 0) return;
@@ -286,7 +301,11 @@ systemDarkMQ.addEventListener("change", () => {
  */
 async function startupSettings(): Promise<{
   get(key: string): Promise<unknown>;
-  /** Every read so far succeeded: an unset value really is unset, not unread. */
+  /**
+   * No load or read failed so far. A weak guarantee: the store plugin reads a
+   * settings file it cannot parse as empty, without failing. What keeps such
+   * settings safe at startup is that empty settings are never migrated.
+   */
   allRead(): boolean;
 }> {
   let failed = false;
@@ -348,10 +367,13 @@ async function initTheme(): Promise<void> {
     savedDay,
     savedNight
   );
+  if (savedDay !== undefined) savedSlotKeys.add(DAY_THEME_KEY);
+  if (savedNight !== undefined) savedSlotKeys.add(NIGHT_THEME_KEY);
   // Settings from before the day/night slots: save the derived pair, best
   // effort (a store that cannot be written must not stop startup). Only from
   // settings actually read: a slot that could not be read is not missing.
   const migrated = slotsToMigrate(
+    themeCatalog,
     { themeId: savedThemeId, appearance: savedAppearance, day: savedDay, night: savedNight },
     followThemes
   );
@@ -744,7 +766,11 @@ const RECENT_MAX = 10;
 
 // This window's writes to the last folder, one at a time: closing a folder then
 // opening another must not let the close's read-then-delete land after the save.
-// (Two windows can still interleave: the store has no compare-and-set.)
+// Two windows can still interleave, as the store has no compare-and-set: if
+// window A closes folder X while window B saves folder Y, A may read X, then B
+// write Y, then A delete it. The next launch then shows the home screen instead
+// of Y. Accepted: it takes two windows writing within a few milliseconds, and
+// costs one reopening.
 let rootPathWrites: Promise<void> = Promise.resolve();
 
 function queueRootPathWrite(write: () => Promise<void>): Promise<void> {
@@ -2342,7 +2368,10 @@ async function init(): Promise<void> {
     // The last folder may be gone since (deleted, unmounted volume): then home.
     // "denied" or "error" still opens it: the folder view says what is wrong.
     const fromSaved = pending?.kind !== "folder";
-    savedStatus = fromSaved ? await pathStatus(view.path) : "dir";
+    // Bounded like the home screen's checks: a network volume that does not
+    // answer must not hold the window empty. "unknown" opens the folder, whose
+    // view then says what is wrong.
+    savedStatus = fromSaved ? await pathStatus(view.path, PATH_STATUS_TIMEOUT) : "dir";
     if (savedStatus !== "missing" && savedStatus !== "file" && savedStatus !== "other") {
       target = { kind: "folder", rootPath: view.path, dir: [] };
     }

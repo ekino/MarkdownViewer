@@ -147,7 +147,11 @@ export function parseMarkdownHref(
   return { filePart: decodePathPart(rawFile), anchor: decodeAnchor(rawAnchor) };
 }
 
-/** A percent-encoded path, decoded; a malformed escape (`100%.md`) is used as written. */
+/**
+ * A percent-encoded path, decoded; a malformed escape (`100%.md`) is used as
+ * written. Known limit: a valid escape is always decoded, so a file whose name
+ * holds one literally (`50%20off.md`) must be linked as `50%2520off.md`.
+ */
 export function decodePathPart(raw: string): string {
   try {
     return decodeURIComponent(raw);

@@ -541,31 +541,34 @@ describe("day and night themes", () => {
 });
 
 describe("slotsToMigrate", () => {
+  const catalog = buildThemeCatalog([]);
   const follow = { day: "sepia", night: "nord" };
+  const saved = (themeId: unknown, appearance: unknown, day: unknown, night: unknown) => ({ themeId, appearance, day, night });
 
-  it("saves the slots missing from settings older than them", () => {
-    expect(slotsToMigrate({ themeId: "sepia", appearance: undefined, day: undefined, night: undefined }, follow)).toEqual({
+  it("saves both slots for settings older than them", () => {
+    expect(slotsToMigrate(catalog, saved("sepia", undefined, undefined, undefined), follow)).toEqual({
       dayThemeId: "sepia",
       nightThemeId: "nord",
     });
-    expect(slotsToMigrate({ themeId: undefined, appearance: "dark", day: "light", night: undefined }, follow)).toEqual({
+    expect(slotsToMigrate(catalog, saved(undefined, "dark", undefined, undefined), follow)).toEqual({
+      dayThemeId: "sepia",
       nightThemeId: "nord",
     });
   });
 
-  it("saves the missing slot when only the other one was chosen", () => {
-    // Follow macOS on, a night theme picked: the day slot must not keep
-    // following the fixed theme, which the reader may change later.
-    expect(slotsToMigrate({ themeId: undefined, appearance: undefined, day: undefined, night: "nord" }, follow)).toEqual({
-      dayThemeId: "sepia",
-    });
+  it("does not guess the missing slot of newer settings", () => {
+    // Follow macOS on, Nord picked at night, then follow turned off: the fixed
+    // theme is now Nord, and deriving the day slot from it would show a day
+    // theme the reader never chose. The next theme choice saves it instead.
+    expect(slotsToMigrate(catalog, saved("nord", undefined, undefined, "nord"), follow)).toEqual({});
+    expect(slotsToMigrate(catalog, saved(undefined, "dark", "light", undefined), follow)).toEqual({});
   });
 
-  it("never rewrites a saved slot, even one whose theme is unknown right now", () => {
-    expect(slotsToMigrate({ themeId: "sepia", appearance: undefined, day: "my-theme", night: "gone" }, follow)).toEqual({});
+  it("waits while the fixed theme is unknown (custom theme unreadable for now)", () => {
+    expect(slotsToMigrate(catalog, saved("my-light", undefined, undefined, undefined), follow)).toEqual({});
   });
 
   it("writes nothing with no theme saved (first launch, or a store read as empty)", () => {
-    expect(slotsToMigrate({ themeId: undefined, appearance: undefined, day: undefined, night: undefined }, follow)).toEqual({});
+    expect(slotsToMigrate(catalog, saved(undefined, undefined, undefined, undefined), follow)).toEqual({});
   });
 });

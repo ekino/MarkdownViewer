@@ -207,26 +207,28 @@ export interface FollowThemes {
 }
 
 /**
- * The day/night slots to save at startup: a slot never written, in settings
- * that already hold a theme choice (a fixed theme, or the other slot). Saving
- * it stops it depending on the fixed theme, which changes as soon as the
- * reader turns "follow macOS" off.
+ * The day/night slots to save at startup, for settings older than the slots:
+ * a theme choice (a fixed theme or the legacy appearance) and no slot at all.
+ * Saving them stops them depending on the fixed theme, which changes as soon
+ * as the reader picks another one.
  *
- * Nothing else is written: a slot whose theme is unknown right now (a custom
- * theme file unreadable for a moment) keeps its saved id and resolves again
- * next launch, and settings with no theme choice at all (first launch, or a
- * settings file the store could not read and treats as empty) are left alone.
+ * Nothing is written otherwise. Settings that hold one slot are newer: the
+ * missing one is saved with the reader's next theme choice, from what they
+ * see, not guessed here from a fixed theme they may have changed since. A
+ * fixed theme unknown right now (a custom theme file unreadable for a
+ * moment) would yield fallback slots: migration waits for a launch that
+ * reads it. Settings with no theme choice (first launch, or a settings file
+ * the store read as empty) are left alone.
  */
 export function slotsToMigrate(
+  catalog: Record<ThemeId, Theme>,
   saved: { themeId: unknown; appearance: unknown; day: unknown; night: unknown },
   follow: FollowThemes
 ): Record<string, ThemeId> {
-  const anyChoice = [saved.themeId, saved.appearance, saved.day, saved.night].some((v) => v !== undefined);
-  if (!anyChoice) return {};
-  const out: Record<string, ThemeId> = {};
-  if (saved.day === undefined) out[DAY_THEME_KEY] = follow.day;
-  if (saved.night === undefined) out[NIGHT_THEME_KEY] = follow.night;
-  return out;
+  if (saved.day !== undefined || saved.night !== undefined) return {};
+  if (saved.themeId === undefined && saved.appearance === undefined) return {};
+  if (saved.themeId !== undefined && !isThemeId(catalog, saved.themeId)) return {};
+  return { [DAY_THEME_KEY]: follow.day, [NIGHT_THEME_KEY]: follow.night };
 }
 
 /**

@@ -149,7 +149,9 @@ fn nav_states() -> &'static Mutex<HashMap<String, NavMenuState>> {
 /// Enable the Go menu items for the window `label`, the frontmost one.
 fn apply_nav_menu(label: &str) {
     let state = nav_states().lock().ok().and_then(|s| s.get(label).copied());
-    let Ok(items) = nav_items().lock() else {
+    // Cloned out of the lock: `set_enabled` hops to the main thread, which may
+    // be waiting on this lock itself.
+    let Ok(items) = nav_items().lock().map(|items| items.clone()) else {
         return;
     };
     for (id, item) in items.iter() {
