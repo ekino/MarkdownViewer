@@ -11,6 +11,10 @@ import {
   mergeCustomThemes,
   parseTheme,
   resolveActiveThemeId,
+  resolveDisplayedThemeId,
+  resolveFollowThemes,
+  slotsToMigrate,
+  missingSlots,
   resolveInitialThemeId,
   sanitizeCustomThemes,
   VALID_THEME_ID_RE,
@@ -29,7 +33,7 @@ function validThemeFixture(overrides: Partial<Theme> = {}): Theme {
 }
 
 describe("BUILTIN_THEMES catalog", () => {
-  it("has exactly the eight expected themes", () => {
+  it("has exactly the ten expected themes", () => {
     const ids = Object.keys(BUILTIN_THEMES).sort();
     expect(ids).toEqual(
       [
@@ -41,6 +45,8 @@ describe("BUILTIN_THEMES catalog", () => {
         "sepia",
         "solarized-dark",
         "solarized-light",
+        "speakino-dark",
+        "speakino-light",
       ].sort()
     );
   });
@@ -487,5 +493,119 @@ describe("applyThemeToDOM", () => {
   it("does nothing if the themeId is unknown", () => {
     applyThemeToDOM(BUILTIN_THEMES, root, "nope");
     expect(root.dataset.themeId).toBeUndefined();
+  });
+});
+
+describe("day and night themes", () => {
+  const catalog = BUILTIN_THEMES;
+
+  it("keeps saved slots that exist and have the right appearance", () => {
+    expect(resolveFollowThemes(catalog, "light", "github", "nord")).toEqual({
+      day: "github",
+      night: "nord",
+    });
+  });
+
+  it("derives missing or mismatched slots from the fixed theme and its pair", () => {
+    expect(resolveFollowThemes(catalog, "speakino-light", undefined, "github")).toEqual({
+      day: "speakino-light",
+      night: "speakino-dark",
+    });
+    expect(resolveFollowThemes(catalog, "speakino-dark", "gone", null)).toEqual({
+      day: "speakino-light",
+      night: "speakino-dark",
+    });
+  });
+
+  it("shows the fixed theme unless following macOS", () => {
+    const slots = { day: "github", night: "nord" };
+    expect(resolveDisplayedThemeId(catalog, "sepia", false, slots, true)).toBe("sepia");
+    expect(resolveDisplayedThemeId(catalog, "sepia", true, slots, false)).toBe("github");
+    expect(resolveDisplayedThemeId(catalog, "sepia", true, slots, true)).toBe("nord");
+  });
+
+  it("moves a theme out of a slot once it changes appearance", () => {
+    // A custom light theme in the day slot is edited into a dark one.
+    const edited = buildThemeCatalog([
+      { ...BUILTIN_THEMES.dark, id: "mine", name: "Mine", pair: "light" },
+    ]);
+    expect(resolveFollowThemes(edited, "light", "mine", "mine")).toEqual({
+      day: "light",
+      night: "mine",
+    });
+  });
+
+  it("falls back to the fixed theme's pair when a slot no longer fits", () => {
+    const slots = { day: "github", night: "light" };
+    expect(resolveDisplayedThemeId(catalog, "light", true, slots, true)).toBe("dark");
+  });
+});
+
+describe("slotsToMigrate", () => {
+  const catalog = buildThemeCatalog([]);
+  const follow = { day: "sepia", night: "nord" };
+  const saved = (themeId: unknown, appearance: unknown, day: unknown, night: unknown) => ({ themeId, appearance, day, night });
+
+  it("saves both slots for settings older than them", () => {
+    expect(slotsToMigrate(catalog, saved("sepia", undefined, undefined, undefined), follow)).toEqual({
+      dayThemeId: "sepia",
+      nightThemeId: "nord",
+    });
+    expect(slotsToMigrate(catalog, saved(undefined, "dark", undefined, undefined), follow)).toEqual({
+      dayThemeId: "sepia",
+      nightThemeId: "nord",
+    });
+  });
+
+  it("does not guess the missing slot of newer settings", () => {
+    // Follow macOS on, Nord picked at night, then follow turned off: the fixed
+    // theme is now Nord, and deriving the day slot from it would show a day
+    // theme the reader never chose. The next theme choice saves it instead.
+    expect(slotsToMigrate(catalog, saved("nord", undefined, undefined, "nord"), follow)).toEqual({});
+    expect(slotsToMigrate(catalog, saved(undefined, "dark", "light", undefined), follow)).toEqual({});
+  });
+
+  it("waits while the fixed theme is unknown (custom theme unreadable for now)", () => {
+    expect(slotsToMigrate(catalog, saved("my-light", undefined, undefined, undefined), follow)).toEqual({});
+  });
+
+  it("writes nothing with no theme saved (first launch, or a store read as empty)", () => {
+    expect(slotsToMigrate(catalog, saved(undefined, undefined, undefined, undefined), follow)).toEqual({});
+  });
+});
+
+describe("missingSlots", () => {
+  const reader = (values: Record<string, unknown>) => {
+    const opened = { count: 0 };
+    const open = async () => {
+      opened.count += 1;
+      return async (key: string) => values[key];
+    };
+    return { open, opened };
+  };
+
+  it("returns the slots absent from the settings", async () => {
+    const { open } = reader({});
+    expect(await missingSlots(new Set(), open)).toEqual(["dayThemeId", "nightThemeId"]);
+  });
+
+  it("does not return a slot another window saved meanwhile, and remembers it", async () => {
+    const saved = new Set<string>();
+    const { open } = reader({ dayThemeId: "sepia" });
+    expect(await missingSlots(saved, open)).toEqual(["nightThemeId"]);
+    expect(saved.has("dayThemeId")).toBe(true);
+  });
+
+  it("does not read the settings once both slots are known", async () => {
+    const { open, opened } = reader({});
+    expect(await missingSlots(new Set(["dayThemeId", "nightThemeId"]), open)).toEqual([]);
+    expect(opened.count).toBe(0);
+  });
+
+  it("fails when the settings cannot be read, so nothing is forced", async () => {
+    const open = async (): Promise<(key: string) => Promise<unknown>> => {
+      throw new Error("unreadable");
+    };
+    await expect(missingSlots(new Set(), open)).rejects.toThrow("unreadable");
   });
 });

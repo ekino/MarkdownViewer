@@ -6,7 +6,7 @@
 |---|---|
 | **Cmd+O** | Open file |
 | **Shift+Cmd+O** | Open folder |
-| **Cmd+N** | New window (welcome screen) |
+| **Cmd+N** | New window (home screen) |
 | **Shift+Cmd+N** | Open a folder in a new window |
 | **Cmd+M** | Minimize the current window |
 | **Cmd+W** | Close the current window |
@@ -17,6 +17,18 @@ scroll position. Menu commands (Find, Print, Export as PDF, Open Recent…) alwa
 apply to the frontmost window. The **Window** menu lists the open windows and
 switches to the one you select.
 
+## Go
+
+Each window keeps its own history of documents, folders and in-page links.
+
+| Shortcut | Action |
+|---|---|
+| **Cmd+[** | Back |
+| **Cmd+]** | Forward |
+| **Shift+Cmd+H** | Home screen (the folder stays open) |
+| **Cmd+↑** | Enclosing folder |
+| **Shift+Cmd+W** | Close the folder |
+
 ## Overlays
 
 | Shortcut | Action |
@@ -26,4 +38,4 @@ switches to the one you select.
 
 ## Theme
 
-The theme toggle button (sun/moon icon) in the top-right corner switches between light and dark mode. The preference is persisted across sessions.
+The theme toggle button (sun/moon icon) in the top bar switches between your light and dark theme. Which themes those are, and whether the app follows the macOS appearance, is set in **Preferences › Themes**. The choice is persisted across sessions.

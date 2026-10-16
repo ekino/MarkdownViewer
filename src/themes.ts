@@ -4,6 +4,8 @@ import githubJson from "./themes/github.json";
 import lightJson from "./themes/light.json";
 import nordJson from "./themes/nord.json";
 import sepiaJson from "./themes/sepia.json";
+import speakinoDarkJson from "./themes/speakino-dark.json";
+import speakinoLightJson from "./themes/speakino-light.json";
 import solarizedDarkJson from "./themes/solarized-dark.json";
 import solarizedLightJson from "./themes/solarized-light.json";
 
@@ -41,6 +43,9 @@ export interface Theme {
 export const THEME_KEY = "themeId";
 export const FOLLOW_SYSTEM_KEY = "followSystem";
 export const CUSTOM_THEMES_KEY = "customThemes";
+/** The themes used while following macOS: one for light mode, one for dark. */
+export const DAY_THEME_KEY = "dayThemeId";
+export const NIGHT_THEME_KEY = "nightThemeId";
 
 const BUILTIN_LIST: Theme[] = [
   lightJson as Theme,
@@ -51,6 +56,8 @@ const BUILTIN_LIST: Theme[] = [
   solarizedDarkJson as Theme,
   nordJson as Theme,
   sepiaJson as Theme,
+  speakinoLightJson as Theme,
+  speakinoDarkJson as Theme,
 ];
 
 export const BUILTIN_THEMES: Record<ThemeId, Theme> = Object.fromEntries(
@@ -192,6 +199,88 @@ export function resolveActiveThemeId(
     if (t.isDark === systemPrefersDark) return t.id;
   }
   return baseId;
+}
+
+export interface FollowThemes {
+  day: ThemeId;
+  night: ThemeId;
+}
+
+/**
+ * The day/night slots to save at startup, for settings older than the slots:
+ * a theme choice (a fixed theme or the legacy appearance) and no slot at all.
+ * Saving them stops them depending on the fixed theme, which changes as soon
+ * as the reader picks another one.
+ *
+ * Nothing is written otherwise. Settings that hold one slot are newer: the
+ * missing one is saved with the reader's next theme choice, from what they
+ * see, not guessed here from a fixed theme they may have changed since. A
+ * fixed theme unknown right now (a custom theme file unreadable for a
+ * moment) would yield fallback slots: migration waits for a launch that
+ * reads it. Settings with no theme choice (first launch, or a settings file
+ * the store read as empty) are left alone.
+ */
+export function slotsToMigrate(
+  catalog: Record<ThemeId, Theme>,
+  saved: { themeId: unknown; appearance: unknown; day: unknown; night: unknown },
+  follow: FollowThemes
+): Record<string, ThemeId> {
+  if (saved.day !== undefined || saved.night !== undefined) return {};
+  if (saved.themeId === undefined && saved.appearance === undefined) return {};
+  if (saved.themeId !== undefined && !isThemeId(catalog, saved.themeId)) return {};
+  return { [DAY_THEME_KEY]: follow.day, [NIGHT_THEME_KEY]: follow.night };
+}
+
+/**
+ * The day/night slots absent from the settings. Slots in `saved` are known to
+ * be there; the others are read now, and those found are added to `saved`.
+ * Reading is only opened when a slot is unknown.
+ */
+export async function missingSlots(
+  saved: Set<string>,
+  open: () => Promise<(key: string) => Promise<unknown>>
+): Promise<string[]> {
+  const unknown = [DAY_THEME_KEY, NIGHT_THEME_KEY].filter((k) => !saved.has(k));
+  if (unknown.length === 0) return [];
+  const get = await open();
+  const missing: string[] = [];
+  for (const key of unknown) {
+    if ((await get(key)) === undefined) missing.push(key);
+    else saved.add(key);
+  }
+  return missing;
+}
+
+/**
+ * The light and dark themes used while following macOS. A saved choice wins
+ * when it still exists and has the right appearance; otherwise the slot is
+ * derived from the fixed theme (itself or its pair), then the builtins.
+ */
+export function resolveFollowThemes(
+  catalog: Record<ThemeId, Theme>,
+  baseId: ThemeId,
+  savedDay: unknown,
+  savedNight: unknown
+): FollowThemes {
+  const pick = (saved: unknown, dark: boolean): ThemeId => {
+    if (isThemeId(catalog, saved) && catalog[saved].isDark === dark) return saved;
+    return resolveActiveThemeId(catalog, baseId, true, dark);
+  };
+  return { day: pick(savedDay, false), night: pick(savedNight, true) };
+}
+
+/** The theme on screen: the fixed one, or the slot matching macOS. */
+export function resolveDisplayedThemeId(
+  catalog: Record<ThemeId, Theme>,
+  fixedId: ThemeId,
+  followSystem: boolean,
+  slots: FollowThemes,
+  systemPrefersDark: boolean
+): ThemeId {
+  if (!followSystem) return fixedId;
+  const id = systemPrefersDark ? slots.night : slots.day;
+  if (catalog[id]?.isDark === systemPrefersDark) return id;
+  return resolveActiveThemeId(catalog, fixedId, true, systemPrefersDark);
 }
 
 export function applyThemeToDOM(

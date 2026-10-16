@@ -28,6 +28,7 @@ export const APPEARANCE_KEY = "appearance";
 export const FONTSIZE_KEY = "fontSize";
 export const OUTLINE_PREF_KEY = "outlinePref";
 export const FINDER_OPEN_KEY = "finderOpenPref";
+export const LAUNCH_KEY = "launchView";
 export const LEGACY_THEME_KEY = "theme";
 
 export const BODY_FONT_KEY = "bodyFontFamily";
@@ -174,7 +175,12 @@ export function resolveInitialOutlinePref(value: unknown): OutlinePref {
 
 export function setSegmentActive(group: HTMLElement, value: string): void {
   for (const btn of group.querySelectorAll<HTMLButtonElement>("button")) {
-    btn.classList.toggle("active", btn.dataset.value === value);
+    const on = btn.dataset.value === value;
+    btn.classList.toggle("active", on);
+    if (btn.getAttribute("role") === "radio") {
+      btn.setAttribute("aria-checked", String(on));
+      btn.tabIndex = on ? 0 : -1;
+    }
   }
 }
 
@@ -245,5 +251,65 @@ export function applyCustomFontSizeToDOM(
     root.style.setProperty("--md-body-size", `${sizePx}px`);
   } else {
     root.style.removeProperty("--md-body-size");
+  }
+}
+
+/** What a window shows when the app starts with nothing to open. */
+export type LaunchPref = "home" | "last-folder";
+export const LAUNCH_VALUES: readonly LaunchPref[] = ["home", "last-folder"];
+
+export function isLaunchPref(value: unknown): value is LaunchPref {
+  return typeof value === "string" && (LAUNCH_VALUES as readonly string[]).includes(value);
+}
+
+/** Defaults to the home screen ("Reprendre") rather than reopening the last folder. */
+export function resolveInitialLaunchPref(value: unknown): LaunchPref {
+  return isLaunchPref(value) ? value : "home";
+}
+
+/**
+ * The settings to write: the keys whose value differs from `before`, plus
+ * every key of `forced` (what the reader just chose, written even when this
+ * window already had it, since another window may have changed the store).
+ */
+export function changedSettings(
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+  forced: Record<string, unknown> = {}
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(after)) {
+    if (before[key] !== value) out[key] = value;
+  }
+  return { ...out, ...forced };
+}
+
+/**
+ * The settings one save should write: those that changed since `before`,
+ * those the reader just chose (`forced`), and those whose last write failed
+ * (`unsaved`), taken from the current values.
+ */
+export function settingsToWrite(
+  current: Record<string, unknown>,
+  before: Record<string, unknown>,
+  forced: Record<string, unknown>,
+  unsaved: ReadonlySet<string>
+): Record<string, unknown> {
+  const retry: Record<string, unknown> = {};
+  for (const key of unsaved) {
+    if (key in current) retry[key] = current[key];
+  }
+  return { ...retry, ...changedSettings(before, current, forced) };
+}
+
+/** After a write: its keys are saved, or still to be written. */
+export function settleWrite(
+  unsaved: Set<string>,
+  written: Record<string, unknown>,
+  ok: boolean
+): void {
+  for (const key of Object.keys(written)) {
+    if (ok) unsaved.delete(key);
+    else unsaved.add(key);
   }
 }

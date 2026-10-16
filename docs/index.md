@@ -23,8 +23,8 @@ features:
     details: KaTeX math expressions and Mermaid diagrams rendered inline with fullscreen view.
   - title: Syntax Highlighting
     details: Code blocks with automatic language detection powered by highlight.js.
-  - title: Dark Mode
-    details: Follows macOS system appearance automatically, with manual toggle.
+  - title: Themes
+    details: Ten built-in themes plus your own, with one for light mode and one for dark mode that follow the macOS appearance.
   - title: Secure Rendering
     details: All HTML sanitized through DOMPurify — no XSS, no script injection, no iframe attacks.
   - title: Native Performance

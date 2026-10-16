@@ -1,8 +1,13 @@
 import mermaid from "mermaid";
 import "katex/dist/katex.min.css";
+// The chrome's typefaces (Speakino's), bundled so they load offline and under the CSP.
+import "@fontsource-variable/bricolage-grotesque/opsz.css";
+import "@fontsource/dm-mono/400.css";
+import "@fontsource/dm-mono/500.css";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { resolveResource } from "@tauri-apps/api/path";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { readDir, readTextFile } from "@tauri-apps/plugin-fs";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -32,6 +37,7 @@ import {
   MAX_CUSTOM_FONT_SIZE,
   MIN_CUSTOM_FONT_SIZE,
   FINDER_OPEN_KEY,
+  LAUNCH_KEY,
   OUTLINE_PREF_KEY,
   applyBodyFontToDOM,
   applyCodeFontToDOM,
@@ -43,19 +49,25 @@ import {
   resolveInitialFontFamily,
   resolveInitialFontSize,
   resolveInitialFinderOpenPref,
+  resolveInitialLaunchPref,
   resolveInitialFontWeight,
   resolveInitialOutlinePref,
   setSegmentActive,
+  settingsToWrite,
+  settleWrite,
   type FinderOpenPref,
   type FontSize,
   type FontWeight,
+  type LaunchPref,
   type OutlinePref,
 } from "./preferences";
 import {
   BUILTIN_THEMES,
   BUILTIN_THEME_ORDER,
   CUSTOM_THEMES_KEY,
+  DAY_THEME_KEY,
   FOLLOW_SYSTEM_KEY,
+  NIGHT_THEME_KEY,
   REQUIRED_VAR_KEYS,
   THEME_KEY,
   applyThemeToDOM,
@@ -63,8 +75,12 @@ import {
   isTheme,
   mergeCustomThemes,
   parseTheme,
-  resolveActiveThemeId,
+  resolveDisplayedThemeId,
+  resolveFollowThemes,
+  slotsToMigrate,
+  missingSlots,
   resolveInitialThemeId,
+  type FollowThemes,
   sanitizeCustomThemes,
   type Theme,
   type ThemeId,
@@ -76,19 +92,38 @@ import {
   toHexForPicker,
 } from "./theme-editor";
 import { createSearchController, type SearchController } from "./search";
-import type { Entry, PendingOpen, RecentEntry } from "./utils";
+import type { Entry, LastRead, Listing, PendingOpen, RecentEntry } from "./utils";
 import {
+  MARKDOWN_EXTENSIONS,
   classifyLink,
+  decodeAnchor,
   extractRootName,
-  filterAndSortEntries,
+  parentLabel,
   findReadme,
   getFullPath,
+  isLastRead,
+  isMarkdownName,
+  listingStatusFromError,
   mergeRecent,
   parseMarkdownHref,
+  decodePathPart,
   resolveInitialView,
   resolvePath,
+  shouldWriteLastRead,
+  summarizeListing,
   windowTitle,
 } from "./utils";
+import {
+  createNavigator,
+  returnTarget,
+  type CommitContext,
+  type DecorationContext,
+  type NavEntry,
+  type Navigator as WindowNavigator,
+  type Positioning,
+} from "./navigator";
+import { buildBreadcrumb, buildFileList, buildFolderView, buildHome, type HomeData } from "./screens";
+import { appMark, icon } from "./icons";
 
 // --- Theme & preferences management ---
 
@@ -96,8 +131,12 @@ const themeToggle = document.getElementById(
   "theme-toggle"
 ) as HTMLButtonElement;
 
+// The theme shown when not following macOS, and the light/dark pair used when
+// following it. Choosing a theme also fills the slot matching its appearance,
+// so turning "follow macOS" on keeps the reader's latest choices.
 let currentThemeId: ThemeId = "light";
 let followSystem = false;
+let followThemes: FollowThemes = { day: "light", night: "dark" };
 let customThemes: Theme[] = [];
 let themeCatalog: Record<ThemeId, Theme> = { ...BUILTIN_THEMES };
 let currentBodyFont: string | null = null;
@@ -105,6 +144,7 @@ let currentCodeFont: string | null = null;
 let currentFontWeight: FontWeight | null = null;
 let currentCustomFontSize: number | null = null;
 let finderOpenPref: FinderOpenPref = "new-window";
+let launchPref: LaunchPref = "home";
 const systemDarkMQ = window.matchMedia("(prefers-color-scheme: dark)");
 
 function isDark(): boolean {
@@ -112,19 +152,143 @@ function isDark(): boolean {
 }
 
 function activeThemeId(): ThemeId {
-  return resolveActiveThemeId(
+  return resolveDisplayedThemeId(
     themeCatalog,
     currentThemeId,
     followSystem,
+    followThemes,
     systemDarkMQ.matches
   );
+}
+
+/**
+ * Bring the fixed theme and the light/dark slots back in line with the
+ * catalog after a theme was deleted, imported, renamed or switched between
+ * light and dark: a slot always holds an existing theme of its appearance.
+ */
+function reconcileThemeChoices(renamed?: { from: ThemeId; to: ThemeId }): void {
+  const rename = (id: ThemeId) =>
+    renamed && id === renamed.from ? renamed.to : id;
+  currentThemeId = rename(currentThemeId);
+  if (!(currentThemeId in themeCatalog)) currentThemeId = "light";
+  followThemes = resolveFollowThemes(
+    themeCatalog,
+    currentThemeId,
+    rename(followThemes.day),
+    rename(followThemes.night)
+  );
+}
+
+type ThemeChoices = Record<string, ThemeId | boolean>;
+
+/** Everything a theme save may write, so "before" and "after" compare alike. */
+function themeChoices(): ThemeChoices {
+  return {
+    [THEME_KEY]: currentThemeId,
+    [DAY_THEME_KEY]: followThemes.day,
+    [NIGHT_THEME_KEY]: followThemes.night,
+    [FOLLOW_SYSTEM_KEY]: followSystem,
+  };
+}
+
+// Theme settings whose last write failed. They are written again, from this
+// window's current values, with the next theme save. Known limit: if another
+// app window wrote one of them in between, this window's value wins. That
+// takes a failed write here followed by a successful write of the same key
+// elsewhere.
+const unsavedThemeKeys = new Set<string>();
+
+// Day/night slots known to be in the settings (read at startup or written
+// since). A slot not there yet is derived from the fixed theme, which changes
+// as soon as the reader picks another one: the next theme save writes it as
+// it is now, so it stops moving. That save reads the settings again first, in
+// the write queue: another window may have saved the slot since this one
+// started, or startup may have failed to read it.
+const savedSlotKeys = new Set<string>();
+
+/** Write theme settings; on failure, remember their keys for the next save. */
+async function writeThemeSettings(
+  entries: Record<string, unknown>
+): Promise<void> {
+  let ok = true;
+  try {
+    await savePrefs(entries);
+  } catch {
+    ok = false;
+  }
+  settleWrite(unsavedThemeKeys, entries, ok);
+  if (ok) {
+    for (const key of [DAY_THEME_KEY, NIGHT_THEME_KEY]) {
+      if (key in entries) savedSlotKeys.add(key);
+    }
+  }
+}
+
+/**
+ * Write the theme settings that changed since `before`, plus `forced` (what
+ * the reader just chose), plus any whose last write failed, plus the slots
+ * still absent from the settings, in one save. Nothing else: another window
+ * may have chosen the other slot meanwhile, and rewriting it from this
+ * window's memory would undo that.
+ *
+ * The values are taken now, and the settings read in the write queue, so
+ * saves land in the order the reader made the choices. If the settings
+ * cannot be read, nothing is written: a fixed theme saved without the slot
+ * derived from the previous one would show, next launch, a slot the reader
+ * never chose. The keys are retried with the next theme save.
+ */
+async function saveThemeChoices(
+  before: ThemeChoices,
+  forced: Record<string, unknown> = {}
+): Promise<void> {
+  const now = themeChoices();
+  let entries: Record<string, unknown>;
+  let ok = true;
+  try {
+    entries = await savePrefsReading(async (get) => {
+      const slots: Record<string, unknown> = {};
+      for (const key of await missingSlots(savedSlotKeys, async () => get)) {
+        slots[key] = now[key];
+      }
+      return settingsToWrite(now, before, { ...slots, ...forced }, unsavedThemeKeys);
+    });
+  } catch {
+    ok = false;
+    entries = settingsToWrite(now, before, forced, unsavedThemeKeys);
+  }
+  settleWrite(unsavedThemeKeys, entries, ok);
+  if (ok) {
+    for (const key of [DAY_THEME_KEY, NIGHT_THEME_KEY]) {
+      if (key in entries) savedSlotKeys.add(key);
+    }
+  }
+}
+
+/** Choose a theme: it fills its light or dark slot, and is shown unless following macOS. */
+async function selectTheme(
+  id: ThemeId,
+  before: ThemeChoices = themeChoices()
+): Promise<void> {
+  const theme = themeCatalog[id];
+  if (!theme) return;
+  reconcileThemeChoices();
+  followThemes = theme.isDark
+    ? { ...followThemes, night: id }
+    : { ...followThemes, day: id };
+  if (!followSystem) currentThemeId = id;
+  applyActiveTheme();
+  refreshThemeGridSelection();
+  await saveThemeChoices(before, {
+    [theme.isDark ? NIGHT_THEME_KEY : DAY_THEME_KEY]: id,
+    ...(followSystem ? {} : { [THEME_KEY]: id }),
+  });
 }
 
 function applyActiveTheme(): void {
   const id = activeThemeId();
   applyThemeToDOM(themeCatalog, document.documentElement, id);
   const dark = themeCatalog[id]?.isDark ?? false;
-  themeToggle.textContent = dark ? "\u2600\uFE0F" : "\u{1F319}";
+  themeToggle.innerHTML = icon(dark ? "sun" : "moon");
   mermaid.initialize({
     startOnLoad: false,
     theme: dark ? "dark" : "default",
@@ -149,8 +313,46 @@ systemDarkMQ.addEventListener("change", () => {
   }
 });
 
+/**
+ * Reads settings at startup. An unreadable store or value reads as unset, so
+ * every setting falls back to its default and startup goes on in a consistent
+ * state (an empty window, or half-applied settings, would be worse).
+ */
+async function startupSettings(): Promise<{
+  get(key: string): Promise<unknown>;
+  /**
+   * No load or read failed so far. A weak guarantee: the store plugin reads a
+   * settings file it cannot parse as empty, without failing. Startup writes
+   * nothing over such settings, since empty settings are never migrated; the
+   * plugin itself still saves over them (on quit, or with any later save).
+   */
+  allRead(): boolean;
+}> {
+  let failed = false;
+  let store: Awaited<ReturnType<typeof load>> | null = null;
+  try {
+    store = await load(STORE_FILE);
+  } catch (e) {
+    failed = true;
+    console.warn("Settings unreadable, using the defaults:", e);
+  }
+  return {
+    async get(key) {
+      if (!store) return undefined;
+      try {
+        return await store.get(key);
+      } catch (e) {
+        failed = true;
+        console.warn(`Setting ${key} unreadable, using its default:`, e);
+        return undefined;
+      }
+    },
+    allRead: () => !failed,
+  };
+}
+
 async function initTheme(): Promise<void> {
-  const store = await load(STORE_FILE);
+  const store = await startupSettings();
   const savedThemeId = await store.get(THEME_KEY);
   const savedAppearance = await store.get(APPEARANCE_KEY);
   const savedFollow = await store.get(FOLLOW_SYSTEM_KEY);
@@ -177,6 +379,27 @@ async function initTheme(): Promise<void> {
     savedAppearance
   );
   followSystem = savedFollow === true;
+  const savedDay = await store.get(DAY_THEME_KEY);
+  const savedNight = await store.get(NIGHT_THEME_KEY);
+  followThemes = resolveFollowThemes(
+    themeCatalog,
+    currentThemeId,
+    savedDay,
+    savedNight
+  );
+  if (savedDay !== undefined) savedSlotKeys.add(DAY_THEME_KEY);
+  if (savedNight !== undefined) savedSlotKeys.add(NIGHT_THEME_KEY);
+  // Settings from before the day/night slots: save the derived pair, best
+  // effort (a store that cannot be written must not stop startup). Only from
+  // settings actually read: a slot that could not be read is not missing.
+  const migrated = slotsToMigrate(
+    themeCatalog,
+    { themeId: savedThemeId, appearance: savedAppearance, day: savedDay, night: savedNight },
+    followThemes
+  );
+  if (Object.keys(migrated).length > 0 && store.allRead()) {
+    void writeThemeSettings(migrated);
+  }
   currentBodyFont = resolveInitialFontFamily(await store.get(BODY_FONT_KEY));
   currentCodeFont = resolveInitialFontFamily(await store.get(CODE_FONT_KEY));
   currentFontWeight = resolveInitialFontWeight(
@@ -203,39 +426,55 @@ async function initTheme(): Promise<void> {
 import { invoke } from "@tauri-apps/api/core";
 
 function printDocument(): void {
+  // Native menu items stay enabled; there is nothing to print without a document.
+  if (activeScreen() !== "doc") return;
   invoke("print_webview");
 }
 
+// The export captures the page as it is on screen, so navigation is held off
+// from the save dialog until the capture is done, and only one export runs at
+// a time.
 async function exportPdf(): Promise<void> {
-  const defaultName = activeFile
-    ? activeFile.split("/").pop()!.replace(/\.md$/i, ".pdf")
-    : "document.pdf";
+  if (activeScreen() !== "doc" || !activeFile) return;
+  await nav.runExclusive(async () => {
+    if (activeScreen() !== "doc" || !activeFile) return;
+    const defaultName = activeFile
+      .split("/")
+      .pop()!
+      .replace(/\.(md|markdown|mdx)$/i, ".pdf");
 
-  const outputPath = await save({
-    defaultPath: defaultName,
-    filters: [{ name: "PDF", extensions: ["pdf"] }],
+    const outputPath = await save({
+      defaultPath: defaultName,
+      filters: [{ name: "PDF", extensions: ["pdf"] }],
+    });
+    if (!outputPath) return;
+
+    await nav.decorationsDone();
+    document.body.classList.add("print-mode");
+    try {
+      await new Promise((r) => setTimeout(r, 150));
+      await invoke("export_pdf", { outputPath });
+    } finally {
+      document.body.classList.remove("print-mode");
+    }
   });
-  if (!outputPath) return;
-
-  document.body.classList.add("print-mode");
-  try {
-    await new Promise((r) => setTimeout(r, 150));
-    await invoke("export_pdf", { outputPath });
-  } finally {
-    document.body.classList.remove("print-mode");
-  }
 }
 
 async function toggleTheme(): Promise<void> {
+  // Swap to the other slot: the reader's light theme for their dark one.
+  const before = themeChoices();
+  reconcileThemeChoices();
   const activeId = activeThemeId();
-  const newId = themeCatalog[activeId]?.pair ?? activeId;
+  const newId = themeCatalog[activeId]?.isDark
+    ? followThemes.day
+    : followThemes.night;
   currentThemeId = newId;
   followSystem = false;
   applyActiveTheme();
-  const store = await load(STORE_FILE);
-  await store.set(THEME_KEY, newId);
-  await store.set(FOLLOW_SYSTEM_KEY, false);
-  await store.save();
+  await saveThemeChoices(before, {
+    [FOLLOW_SYSTEM_KEY]: false,
+    [THEME_KEY]: newId,
+  });
   syncPrefsUI();
   refreshThemeGridSelection();
 }
@@ -250,30 +489,47 @@ themeToggle.addEventListener("click", toggleTheme);
 
 let mermaidCounter = 0;
 
-async function renderMermaidDiagrams(): Promise<void> {
+// Mermaid is not safe for concurrent renders (shared temporary DOM): a pass
+// taking over from an interrupted one queues behind it.
+let mermaidQueue: Promise<unknown> = Promise.resolve();
+
+function renderMermaidSerially(id: string, source: string): ReturnType<typeof mermaid.render> {
+  const run = mermaidQueue.then(() => mermaid.render(id, source));
+  mermaidQueue = run.catch(() => undefined);
+  return run;
+}
+
+async function renderMermaidDiagrams(isCurrent: () => boolean = () => true): Promise<void> {
   const codeBlocks = markdownEl.querySelectorAll("pre > code.language-mermaid");
   if (codeBlocks.length === 0) return;
 
   for (const codeBlock of codeBlocks) {
+    // Rendering is async: stop as soon as another view has replaced this one.
+    if (!isCurrent()) return;
     const pre = codeBlock.parentElement!;
     const source = codeBlock.textContent ?? "";
     const id = `mermaid-${++mermaidCounter}`;
 
-    let title = "Diagram";
+    let title = t("mermaid.diagram");
     const prevEl = pre.previousElementSibling;
     if (prevEl && /^H[2-4]$/.test(prevEl.tagName)) {
-      title = prevEl.textContent ?? "Diagram";
+      title = prevEl.textContent ?? title;
     }
 
     try {
-      const { svg } = await mermaid.render(id, source);
+      const { svg } = await renderMermaidSerially(id, source);
+      if (!isCurrent()) {
+        document.getElementById(id)?.remove();
+        return;
+      }
 
       const wrapper = document.createElement("div");
       wrapper.className = "mermaid-wrapper";
 
       const btn = document.createElement("button");
       btn.className = "mermaid-fullscreen-btn";
-      btn.innerHTML = "<span>&#x26F6;</span> Fullscreen";
+      btn.type = "button";
+      btn.textContent = t("mermaid.fullscreen");
       btn.addEventListener("click", () => openMermaidFullscreen(svg, title));
 
       const preview = document.createElement("div");
@@ -295,11 +551,13 @@ async function renderMermaidDiagrams(): Promise<void> {
         }
       });
     } catch (e) {
+      if (!isCurrent()) return;
       console.warn("Mermaid render failed for diagram", id, e);
       const errWrapper = document.createElement("div");
       errWrapper.className = "mermaid-wrapper";
       errWrapper.style.borderColor = "#ef4444";
       const errMsg = document.createElement("div");
+      errMsg.className = "mermaid-error-msg";
       errMsg.style.cssText = "padding:12px 16px;font-size:12px;color:#ef4444;";
       errMsg.textContent = t("mermaid.error");
       const srcPre = document.createElement("pre");
@@ -309,6 +567,7 @@ async function renderMermaidDiagrams(): Promise<void> {
       srcPre.appendChild(srcCode);
       errWrapper.appendChild(errMsg);
       errWrapper.appendChild(srcPre);
+      addCopyButtons(errWrapper);
       pre.replaceWith(errWrapper);
       document.getElementById(id)?.remove();
     }
@@ -409,9 +668,29 @@ function openMermaidFullscreen(svgContent: string, title: string): void {
 }
 
 const fileList = document.getElementById("file-list") as HTMLDivElement;
-const breadcrumb = document.getElementById("breadcrumb") as HTMLDivElement;
+const breadcrumb = document.getElementById("breadcrumb") as HTMLElement;
 const markdownEl = document.getElementById("markdown") as HTMLDivElement;
-const emptyState = document.getElementById("empty-state") as HTMLDivElement;
+const homeEl = document.getElementById("home") as HTMLElement;
+const folderViewEl = document.getElementById("folder-view") as HTMLElement;
+const docCard = document.getElementById("doc-card") as HTMLDivElement;
+const sidebarEl = document.getElementById("sidebar") as HTMLDivElement;
+const sidebarScrim = document.getElementById("sidebar-scrim") as HTMLDivElement;
+const sidebarCount = document.getElementById("sidebar-count") as HTMLSpanElement;
+const folderSwitcher = document.getElementById("folder-switcher") as HTMLButtonElement;
+const folderSwitcherName = document.getElementById("folder-switcher-name") as HTMLSpanElement;
+const folderSwitcherPath = document.getElementById("folder-switcher-path") as HTMLSpanElement;
+const folderMenu = document.getElementById("folder-menu") as HTMLDivElement;
+const navBackBtn = document.getElementById("nav-back") as HTMLButtonElement;
+const navForwardBtn = document.getElementById("nav-forward") as HTMLButtonElement;
+const navHomeBtn = document.getElementById("nav-home") as HTMLButtonElement;
+const sidebarToggle = document.getElementById("sidebar-toggle") as HTMLButtonElement;
+const sidebarClose = document.getElementById("sidebar-close") as HTMLButtonElement;
+const outlineToggle = document.getElementById("outline-toggle") as HTMLButtonElement;
+const searchToggle = document.getElementById("search-toggle") as HTMLButtonElement;
+const searchBoxEl = document.getElementById("search-box") as HTMLDivElement;
+const navSpinner = document.getElementById("nav-spinner") as HTMLSpanElement;
+const srStatus = document.getElementById("sr-status") as HTMLSpanElement;
+const prefsBtn = document.getElementById("prefs-btn") as HTMLButtonElement;
 const contentEl = document.getElementById("content") as HTMLDivElement;
 const contentLoading = document.getElementById(
   "content-loading"
@@ -426,15 +705,8 @@ const loadError = document.getElementById("load-error") as HTMLDivElement;
 const loadErrorText = document.getElementById(
   "load-error-text"
 ) as HTMLSpanElement;
-const openBtn = document.getElementById("open-btn") as HTMLButtonElement;
-const examplesBtn = document.getElementById(
-  "examples-btn"
-) as HTMLButtonElement;
 const outlineEl = document.getElementById("outline") as HTMLDivElement;
 const outlineNav = document.getElementById("outline-nav") as HTMLElement;
-const titlebarFilename = document.getElementById(
-  "titlebar-filename"
-) as HTMLSpanElement;
 const searchInput = document.getElementById("search-input") as HTMLInputElement;
 const searchCounter = document.getElementById(
   "search-counter"
@@ -459,6 +731,33 @@ const searchOptWholeWord = document.getElementById(
 
 const appWindow = getCurrentWindow();
 
+// In full screen the traffic lights are gone: the title bar can drop the room
+// it keeps for them (WKWebView never reports env(titlebar-area-x)).
+async function syncFullscreen(): Promise<void> {
+  try {
+    document.documentElement.classList.toggle(
+      "is-fullscreen",
+      await appWindow.isFullscreen()
+    );
+  } catch {
+    // Not in Tauri (tests) or not allowed: keep the room for the lights.
+  }
+}
+// Resize events fire during the full-screen animation, before the window
+// reports its new state, and no event marks the end of it: check again a few
+// times over the next seconds.
+let fullscreenRechecks: ReturnType<typeof setTimeout>[] = [];
+void appWindow
+  .onResized(() => {
+    void syncFullscreen();
+    for (const timer of fullscreenRechecks) clearTimeout(timer);
+    fullscreenRechecks = [300, 900, 2000].map((ms) =>
+      setTimeout(() => void syncFullscreen(), ms)
+    );
+  })
+  .catch(() => {});
+void syncFullscreen();
+
 // Keeps the native window title in sync with what the window shows. The title is
 // hidden in our custom title bar; it exists so this window is identifiable in the
 // native Window menu, which is why renaming goes through the Rust command that
@@ -469,6 +768,8 @@ function syncWindowTitle(): void {
   }).catch((e) => console.warn("Failed to set the window title:", e));
 }
 
+// --- Window state ---
+// What the committed view shows. Only the navigator's publish step writes these.
 let rootPath: string | null = null;
 let rootName = "";
 let currentPath: string[] = [];
@@ -478,14 +779,42 @@ let scrollObserver: IntersectionObserver | null = null;
 const STORE_FILE = "settings.json";
 const STORE_KEY = "lastFolder";
 const RECENT_KEY = "recentEntries";
+const LAST_READ_KEY = "lastRead";
 const RECENT_MAX = 10;
 
 // --- Store persistence ---
 
-async function saveRootPath(path: string): Promise<void> {
-  const store = await load(STORE_FILE);
-  await store.set(STORE_KEY, path);
-  await store.save();
+// This window's writes to the last folder, one at a time: closing a folder then
+// opening another must not let the close's read-then-delete land after the save.
+// Two windows can still interleave, as the store has no compare-and-set: if
+// window A closes folder X while window B saves folder Y, A may read X, then B
+// write Y, then A delete it. The next launch then shows the home screen instead
+// of Y. Accepted: it takes two windows writing close together (the gap is a
+// few IPC round trips), and costs one reopening from the recent items.
+let rootPathWrites: Promise<void> = Promise.resolve();
+
+function queueRootPathWrite(write: () => Promise<void>): Promise<void> {
+  const next = rootPathWrites.then(write);
+  rootPathWrites = next.catch(() => {});
+  return next;
+}
+
+function saveRootPath(path: string): Promise<void> {
+  return queueRootPathWrite(async () => {
+    const store = await load(STORE_FILE);
+    await store.set(STORE_KEY, path);
+    await store.save();
+  });
+}
+
+/** Forget the last folder, unless another one has been saved since. */
+function forgetRootPath(path: string): Promise<void> {
+  return queueRootPathWrite(async () => {
+    const store = await load(STORE_FILE);
+    if ((await store.get(STORE_KEY)) !== path) return;
+    await store.delete(STORE_KEY);
+    await store.save();
+  });
 }
 
 async function loadRootPath(): Promise<string | null> {
@@ -525,23 +854,79 @@ async function clearRecents(): Promise<void> {
   await store.set(RECENT_KEY, []);
   await store.save();
   await syncRecentMenu([]);
+  if (activeScreen() === "home") void refreshHome();
 }
 
-// --- Init ---
+// --- Last document read ("Reprendre") ---
+// Shared by every window through the store. Written only on reading activity
+// (opening a document, scrolling it), never when a window closes, so a window
+// left on an old document cannot pass it off as the latest read.
 
-openBtn.addEventListener("click", openFolder);
-examplesBtn.addEventListener("click", openExamples);
+async function loadLastRead(): Promise<LastRead | null> {
+  const store = await load(STORE_FILE);
+  const value = await store.get(LAST_READ_KEY);
+  return isLastRead(value) ? value : null;
+}
+
+async function writeLastRead(next: LastRead): Promise<void> {
+  try {
+    const store = await load(STORE_FILE);
+    if (!shouldWriteLastRead(await store.get(LAST_READ_KEY), next)) return;
+    await store.set(LAST_READ_KEY, next);
+    await store.save();
+  } catch (e) {
+    console.warn("Failed to save the last document read:", e);
+  }
+}
+
+let lastReadTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingLastRead: LastRead | null = null;
+
+function scheduleLastRead(snapshot: LastRead): void {
+  pendingLastRead = snapshot;
+  if (lastReadTimer !== null) clearTimeout(lastReadTimer);
+  lastReadTimer = setTimeout(() => {
+    lastReadTimer = null;
+    if (pendingLastRead) void writeLastRead(pendingLastRead);
+    pendingLastRead = null;
+  }, 1000);
+}
+
+// --- Opening folders and files ---
+
+async function openFolderPath(path: string): Promise<void> {
+  const ok = await nav.navigate({ kind: "folder", rootPath: path, dir: [] });
+  // A folder that cannot be listed is shown (its view says why), not promoted.
+  if (ok && committedListing?.status === "ok") {
+    await saveRootPath(path);
+    await recordRecent(path, "folder");
+  }
+}
 
 async function openExamples(): Promise<void> {
   const examplesPath = await resolveResource("examples");
-  await setRootPath(examplesPath);
+  await openFolderPath(examplesPath);
+}
+
+function docEntry(root: string, file: string, anchor?: string): NavEntry {
+  return { kind: "doc", rootPath: root, dir: file.split("/").slice(0, -1), file, anchor };
+}
+
+/** Open a document; the one already on screen is read again (it may have changed). */
+function openDocument(root: string, file: string): Promise<boolean> {
+  if (activeScreen() === "doc" && root === rootPath && file === activeFile) return nav.reload();
+  return nav.navigate(docEntry(root, file));
 }
 
 async function openFileFromPath(filePath: string): Promise<void> {
   const lastSep = filePath.lastIndexOf("/");
   const parentDir = filePath.substring(0, lastSep);
   const fileName = filePath.substring(lastSep + 1);
-  await setRootPath(parentDir, fileName);
+  const ok = await openDocument(parentDir, fileName);
+  if (ok) {
+    await saveRootPath(parentDir);
+    await recordRecent(filePath, "file");
+  }
 }
 
 // --- Debug HUD ---
@@ -552,13 +937,11 @@ const debugOverlay = createDebugOverlay();
 
 let searchController: SearchController | null = null;
 
+// Disabling keeps the query: it runs again on the next document, as before.
 function setSearchEnabled(enabled: boolean): void {
   searchInput.disabled = !enabled;
   searchPrev.disabled = !enabled;
   searchNext.disabled = !enabled;
-  if (!enabled && searchController) {
-    searchController.clear();
-  }
 }
 
 function handleSearchInputKey(e: KeyboardEvent): void {
@@ -577,14 +960,33 @@ function handleSearchInputKey(e: KeyboardEvent): void {
       searchController?.clear();
     } else {
       searchInput.blur();
+      foldSearch(true);
     }
   }
 }
+
+/**
+ * Fold the compact search field (narrow windows) back behind its button.
+ * From the keyboard (Escape) focus goes to the button; a click elsewhere
+ * leaves focus to the click.
+ */
+function foldSearch(fromKeyboard = false): void {
+  if (!document.body.classList.contains("search-open")) return;
+  document.body.classList.remove("search-open");
+  searchOptionsMenu.classList.remove("visible");
+  searchOptionsBtn.setAttribute("aria-expanded", "false");
+  if (fromKeyboard && searchToggle.getClientRects().length > 0) searchToggle.focus();
+}
+
+// Same breakpoint as the CSS that folds the search field.
+const compactSearchMQ = window.matchMedia("(max-width: 1000px)");
 
 function focusSearch(): void {
   if (searchInput.disabled) {
     return;
   }
+  // In a narrow window the field is folded behind a button: unfold it first.
+  if (compactSearchMQ.matches) document.body.classList.add("search-open");
   searchInput.focus();
   searchInput.select();
 }
@@ -672,20 +1074,35 @@ const prefsBackdrop = document.getElementById(
   "prefs-backdrop"
 ) as HTMLDivElement;
 const prefsClose = document.getElementById("prefs-close") as HTMLButtonElement;
-const prefsDone = document.getElementById("prefs-done") as HTMLButtonElement;
 const prefsFontSize = document.getElementById(
   "prefs-fontsize"
-) as HTMLSelectElement;
+) as HTMLDivElement;
 const prefsOutline = document.getElementById("prefs-outline") as HTMLDivElement;
+const prefsOutlineHint = document.getElementById(
+  "prefs-outline-hint"
+) as HTMLParagraphElement;
 const prefsFinderOpen = document.getElementById(
   "prefs-finder-open"
-) as HTMLDivElement;
+) as HTMLSelectElement;
+const prefsLaunch = document.getElementById("prefs-launch") as HTMLSelectElement;
 const prefsTabs = document.querySelectorAll<HTMLButtonElement>(".prefs-tab");
 const prefsTabPanels =
   document.querySelectorAll<HTMLDivElement>(".prefs-tab-panel");
-const prefsThemeGrid = document.getElementById(
-  "prefs-theme-grid"
+const prefsThemeGridLight = document.getElementById(
+  "prefs-theme-grid-light"
 ) as HTMLDivElement;
+const prefsThemeGridDark = document.getElementById(
+  "prefs-theme-grid-dark"
+) as HTMLDivElement;
+const prefsGridLightLabel = document.getElementById(
+  "prefs-grid-light-label"
+) as HTMLHeadingElement;
+const prefsGridDarkLabel = document.getElementById(
+  "prefs-grid-dark-label"
+) as HTMLHeadingElement;
+const prefsThemeSentence = document.getElementById(
+  "prefs-theme-sentence"
+) as HTMLParagraphElement;
 const prefsFollowSystem = document.getElementById(
   "prefs-follow-system"
 ) as HTMLInputElement;
@@ -707,7 +1124,6 @@ const prefsRevealThemes = document.getElementById(
 const prefsPanelAppearance = document.getElementById(
   "prefs-panel-appearance"
 ) as HTMLDivElement;
-const prefsEditor = document.getElementById("prefs-editor") as HTMLDivElement;
 const prefsEditorName = document.getElementById(
   "prefs-editor-name"
 ) as HTMLInputElement;
@@ -732,18 +1148,9 @@ const prefsEditorCancel = document.getElementById(
 const prefsEditorSave = document.getElementById(
   "prefs-editor-save"
 ) as HTMLButtonElement;
-const prefsAdvancedToggle = document.getElementById(
-  "prefs-advanced-toggle"
-) as HTMLButtonElement;
 const prefsAdvancedReset = document.getElementById(
   "prefs-advanced-reset"
 ) as HTMLButtonElement;
-const prefsAdvanced = document.getElementById(
-  "prefs-advanced"
-) as HTMLDivElement;
-const prefsAdvancedCaret = document.getElementById(
-  "prefs-advanced-caret"
-) as HTMLSpanElement;
 const prefsBodyFont = document.getElementById(
   "prefs-body-font"
 ) as HTMLSelectElement;
@@ -786,13 +1193,17 @@ function syncPrefsUI(): void {
   prefsFollowSystem.checked = followSystem;
   prefsLanguage.value = getLocale();
   refreshThemeGridSelection();
-  prefsFontSize.value =
-    (document.documentElement.dataset.fontsize as FontSize) ?? "medium";
   setSegmentActive(
-    prefsOutline,
+    prefsFontSize,
+    (document.documentElement.dataset.fontsize as FontSize) ?? "medium"
+  );
+  syncOutlineUI(
     (document.documentElement.dataset.outline as OutlinePref) ?? "auto"
   );
-  setSegmentActive(prefsFinderOpen, finderOpenPref);
+  prefsFinderOpen.value = finderOpenPref;
+  prefsLaunch.value = launchPref;
+  // The selects take their width once their values (and fonts) are set.
+  requestAnimationFrame(fitInlineSelects);
   prefsBodyFont.value = currentBodyFont ?? "";
   prefsCodeFont.value = currentCodeFont ?? "";
   prefsFontWeight.value = currentFontWeight ?? "";
@@ -800,19 +1211,98 @@ function syncPrefsUI(): void {
     currentCustomFontSize !== null ? String(currentCustomFontSize) : "";
 }
 
-function refreshThemeGridSelection(): void {
-  if (!prefsThemeGrid) return;
-  const activeId = currentThemeId;
-  for (const tile of prefsThemeGrid.querySelectorAll<HTMLButtonElement>(
-    ".prefs-theme-tile"
-  )) {
-    tile.classList.toggle("active", tile.dataset.themeId === activeId);
+// A <select> is as wide as its longest option; inside a sentence it should
+// be as wide as the choice it shows.
+let selectProbe: HTMLSpanElement | null = null;
+
+function fitInlineSelect(select: HTMLSelectElement): void {
+  if (!selectProbe) {
+    selectProbe = document.createElement("span");
+    selectProbe.setAttribute("aria-hidden", "true");
+    selectProbe.style.cssText =
+      "position:absolute;visibility:hidden;white-space:pre;left:-9999px;top:0";
+    document.body.append(selectProbe);
   }
-  prefsThemeGrid.classList.toggle("disabled", followSystem);
+  const style = getComputedStyle(select);
+  selectProbe.style.font = style.font;
+  selectProbe.style.fontWeight = style.fontWeight;
+  const shown = select.selectedOptions[0]?.textContent;
+  // No matching option (fonts not listed yet): keep the natural width.
+  if (!shown) {
+    select.style.width = "";
+    return;
+  }
+  selectProbe.textContent = shown;
+  const pad =
+    parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) + 2;
+  select.style.width = `${Math.ceil(selectProbe.offsetWidth + pad)}px`;
+}
+
+function fitInlineSelects(): void {
+  for (const select of prefsBackdrop.querySelectorAll<HTMLSelectElement>(
+    "select.prefs-inline"
+  )) {
+    fitInlineSelect(select);
+  }
+}
+
+function syncOutlineUI(pref: OutlinePref): void {
+  setSegmentActive(prefsOutline, pref);
+  prefsOutlineHint.textContent = t(`prefs.outline.hint.${pref}`);
+}
+
+/** The themes in use: both slots while following macOS, else the fixed one. */
+function chosenThemeIds(): Set<ThemeId> {
+  return followSystem
+    ? new Set([followThemes.day, followThemes.night])
+    : new Set([currentThemeId]);
+}
+
+function themeNameSpan(id: ThemeId): HTMLSpanElement {
+  const span = document.createElement("span");
+  span.className = "prefs-theme-name-inline";
+  span.textContent = themeCatalog[id]?.name ?? id;
+  return span;
+}
+
+function refreshThemeGridSelection(): void {
+  const chosen = chosenThemeIds();
+  for (const grid of [prefsThemeGridLight, prefsThemeGridDark]) {
+    for (const tile of grid.querySelectorAll<HTMLButtonElement>(
+      ".prefs-theme-tile"
+    )) {
+      const on = chosen.has(tile.dataset.themeId ?? "");
+      tile.classList.toggle("active", on);
+      tile.setAttribute("aria-pressed", String(on));
+    }
+  }
+  prefsGridLightLabel.textContent = t(
+    followSystem ? "prefs.themes.day" : "prefs.themes.light"
+  );
+  prefsGridDarkLabel.textContent = t(
+    followSystem ? "prefs.themes.night" : "prefs.themes.dark"
+  );
+  // "By day, read in X. By night, in Y." or "Always read in X."
+  if (followSystem) {
+    prefsThemeSentence.replaceChildren(
+      `${t("prefs.themes.day.before")} `,
+      themeNameSpan(followThemes.day),
+      `${t("prefs.themes.night.before")} `,
+      themeNameSpan(followThemes.night),
+      t("prefs.sentence.end")
+    );
+  } else {
+    prefsThemeSentence.replaceChildren(
+      `${t("prefs.themes.fixed.before")} `,
+      themeNameSpan(currentThemeId),
+      t("prefs.sentence.end")
+    );
+  }
 }
 
 function buildThemeGrid(): void {
-  prefsThemeGrid.innerHTML = "";
+  prefsThemeGridLight.replaceChildren();
+  prefsThemeGridDark.replaceChildren();
   const order: ThemeId[] = [
     ...BUILTIN_THEME_ORDER,
     ...customThemes
@@ -822,11 +1312,13 @@ function buildThemeGrid(): void {
   for (const id of order) {
     const theme = themeCatalog[id];
     if (!theme) continue;
-    prefsThemeGrid.appendChild(buildThemeTile(theme));
+    (theme.isDark ? prefsThemeGridDark : prefsThemeGridLight).appendChild(
+      buildThemeTile(theme)
+    );
   }
 }
 
-function buildThemeTile(theme: Theme): HTMLButtonElement {
+function buildThemeTile(theme: Theme): HTMLDivElement {
   const tile = document.createElement("button");
   tile.type = "button";
   tile.className = "prefs-theme-tile";
@@ -859,49 +1351,47 @@ function buildThemeTile(theme: Theme): HTMLButtonElement {
   nameRow.className = "prefs-theme-name";
   const nameSpan = document.createElement("span");
   nameSpan.textContent = theme.name;
-  const check = document.createElement("span");
-  check.className = "prefs-theme-check";
-  check.textContent = "✓";
   nameRow.appendChild(nameSpan);
-  nameRow.appendChild(check);
 
   tile.appendChild(preview);
   tile.appendChild(nameRow);
 
-  const actions = document.createElement("span");
+  tile.addEventListener("click", () => selectTheme(theme.id));
+
+  // Edit, duplicate and delete sit beside the tile, not inside it: a button
+  // cannot hold buttons, and each must be reachable from the keyboard.
+  const cell = document.createElement("div");
+  cell.className = "prefs-theme-cell";
+  const actions = document.createElement("div");
   actions.className = "prefs-theme-actions";
+  const action = (
+    kind: string,
+    glyph: string,
+    labelKey: string,
+    run: () => void
+  ): void => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = `prefs-theme-action ${kind}`;
+    b.textContent = glyph;
+    const label = `${t(labelKey)} — ${theme.name}`;
+    b.title = label;
+    b.setAttribute("aria-label", label);
+    b.addEventListener("click", run);
+    actions.append(b);
+  };
 
   if (theme.custom) {
     tile.classList.add("custom");
-
-    const edit = document.createElement("span");
-    edit.className = "prefs-theme-action edit";
-    edit.textContent = "✎";
-    edit.title = t("prefs.appearance.edit");
-    edit.addEventListener("click", (e) => {
-      e.stopPropagation();
-      openEditor(theme, { editing: true });
-    });
-    actions.appendChild(edit);
+    action("edit", "✎", "prefs.appearance.edit", () =>
+      openEditor(theme, { editing: true })
+    );
   }
-
-  const dup = document.createElement("span");
-  dup.className = "prefs-theme-action duplicate";
-  dup.textContent = "⧉";
-  dup.title = t("prefs.appearance.duplicate");
-  dup.addEventListener("click", (e) => {
-    e.stopPropagation();
-    openEditor({ ...theme, custom: true }, { duplicateFrom: theme.id });
-  });
-  actions.appendChild(dup);
-
+  action("duplicate", "⧉", "prefs.appearance.duplicate", () =>
+    openEditor({ ...theme, custom: true }, { duplicateFrom: theme.id })
+  );
   if (theme.custom) {
-    const del = document.createElement("span");
-    del.className = "prefs-theme-action delete";
-    del.textContent = "×";
-    del.title = t("prefs.appearance.delete");
-    del.addEventListener("click", async (e) => {
-      e.stopPropagation();
+    action("delete", "×", "prefs.appearance.delete", async () => {
       const ok = await confirmDialog({
         title: t("prefs.appearance.delete.confirm.title"),
         message: t("prefs.appearance.delete.confirm"),
@@ -912,28 +1402,18 @@ function buildThemeTile(theme: Theme): HTMLButtonElement {
       if (!ok) return;
       await deleteCustomTheme(theme.id);
     });
-    actions.appendChild(del);
   }
 
-  tile.appendChild(actions);
-
-  tile.addEventListener("click", async () => {
-    currentThemeId = theme.id;
-    applyActiveTheme();
-    refreshThemeGridSelection();
-    await savePref(THEME_KEY, theme.id);
-  });
-
-  return tile;
+  cell.append(tile, actions);
+  return cell;
 }
 
 async function deleteCustomTheme(id: ThemeId): Promise<void> {
+  const before = themeChoices();
   customThemes = customThemes.filter((c) => c.id !== id);
   themeCatalog = buildThemeCatalog(customThemes);
-  if (!(currentThemeId in themeCatalog)) {
-    currentThemeId = "light";
-    await savePref(THEME_KEY, currentThemeId);
-  }
+  reconcileThemeChoices();
+  await saveThemeChoices(before);
   applyActiveTheme();
   buildThemeGrid();
   refreshThemeGridSelection();
@@ -974,11 +1454,8 @@ async function importCustomTheme(jsonText: string): Promise<boolean> {
   const theme = parseTheme(jsonText);
   if (!theme) return false;
   await persistCustomTheme(theme);
-  currentThemeId = theme.id;
-  applyActiveTheme();
   buildThemeGrid();
-  refreshThemeGridSelection();
-  await savePref(THEME_KEY, theme.id);
+  await selectTheme(theme.id);
   return true;
 }
 
@@ -1216,11 +1693,14 @@ async function saveEditorTheme(): Promise<void> {
   }
 
   await persistCustomTheme(theme);
-  currentThemeId = theme.id;
-  await savePref(THEME_KEY, theme.id);
+  const before = themeChoices();
+  const originalId = prefsEditorId.dataset.originalId;
+  if (editorContext.editing && originalId && originalId !== id) {
+    // A renamed theme keeps its place as the fixed theme and in its slot.
+    reconcileThemeChoices({ from: originalId, to: id });
+  }
   buildThemeGrid();
-  applyActiveTheme();
-  refreshThemeGridSelection();
+  await selectTheme(theme.id, before);
   editorPreviewSnapshot = null; // committed; no rollback
   closeEditor(false);
 }
@@ -1269,12 +1749,6 @@ function openPrefs(): void {
   });
 }
 
-function setAdvancedOpen(open: boolean): void {
-  prefsAdvanced.classList.toggle("visible", open);
-  prefsAdvancedToggle.setAttribute("aria-expanded", String(open));
-  prefsAdvancedCaret.textContent = open ? "▾" : "▸";
-}
-
 function closePrefs(): void {
   prefsBackdrop.classList.remove("visible");
   const generation = prefsGeneration;
@@ -1287,13 +1761,11 @@ function closePrefs(): void {
     // Reset transient UI state so the next open lands on a clean default:
     // - close the theme editor if it was open (no preview rollback needed —
     //   user explicitly closed the modal, treat it as a Cancel),
-    // - collapse the advanced typography section,
     // - jump to the General tab,
     // - reset the body scroll to the top.
     if (prefsPanelAppearance.classList.contains("prefs-editor-mode")) {
       closeEditor(true);
     }
-    setAdvancedOpen(false);
     setActiveTab("general");
     const body = prefsBackdrop.querySelector<HTMLDivElement>(".prefs-body");
     if (body) body.scrollTop = 0;
@@ -1303,14 +1775,79 @@ function closePrefs(): void {
 }
 
 async function savePref<T>(key: string, value: T): Promise<void> {
-  const store = await load(STORE_FILE);
-  await store.set(key, value);
-  await store.save();
+  await savePrefs({ [key]: value });
+}
+
+// Writes run one after another, in the order they were asked for: two quick
+// changes can never land in the store the other way round.
+let prefsWrites: Promise<void> = Promise.resolve();
+
+/** Several settings that belong together, written in one save. */
+function savePrefs(entries: Record<string, unknown>): Promise<void> {
+  return savePrefsReading(async () => entries).then(() => {});
+}
+
+/**
+ * Like savePrefs, for settings that depend on what the store holds: `compute`
+ * reads it at its turn in the queue, and returns what to write (nothing when
+ * empty). Resolves with what was written.
+ */
+function savePrefsReading(
+  compute: (get: (key: string) => Promise<unknown>) => Promise<Record<string, unknown>>
+): Promise<Record<string, unknown>> {
+  const write = prefsWrites.then(async () => {
+    const store = await load(STORE_FILE);
+    const entries = await compute((key) => store.get(key));
+    if (Object.keys(entries).length === 0) return entries;
+    for (const [key, value] of Object.entries(entries)) {
+      await store.set(key, value);
+    }
+    await store.save();
+    return entries;
+  });
+  prefsWrites = write.then(
+    () => {},
+    (e) => console.warn("Failed to save settings:", e)
+  );
+  return write;
+}
+
+/** Radio groups of buttons: one Tab stop, arrow keys move the choice. */
+function wireRadioGroup(group: HTMLElement): void {
+  group.addEventListener("keydown", (e) => {
+    const step =
+      e.key === "ArrowRight" || e.key === "ArrowDown"
+        ? 1
+        : e.key === "ArrowLeft" || e.key === "ArrowUp"
+          ? -1
+          : 0;
+    if (!step) return;
+    const radios = Array.from(
+      group.querySelectorAll<HTMLButtonElement>('[role="radio"]')
+    );
+    const at = radios.indexOf(document.activeElement as HTMLButtonElement);
+    if (at < 0) return;
+    e.preventDefault();
+    const next = radios[(at + step + radios.length) % radios.length];
+    next.focus();
+    next.click();
+  });
 }
 
 function initPreferences(): void {
+  wireRadioGroup(prefsOutline);
+  wireRadioGroup(prefsFontSize);
+  prefsBackdrop.addEventListener("change", (e) => {
+    const target = e.target;
+    if (
+      target instanceof HTMLSelectElement &&
+      target.classList.contains("prefs-inline")
+    ) {
+      fitInlineSelect(target);
+    }
+  });
+  document.getElementById("prefs-mark")!.innerHTML = appMark(46);
   prefsClose.addEventListener("click", closePrefs);
-  prefsDone.addEventListener("click", closePrefs);
   prefsBackdrop.addEventListener("click", (e) => {
     if (e.target === prefsBackdrop) closePrefs();
   });
@@ -1362,10 +1899,16 @@ function initPreferences(): void {
   buildThemeGrid();
 
   prefsFollowSystem.addEventListener("change", async () => {
+    // Turning it off keeps the theme on screen as the fixed one.
+    const before = themeChoices();
+    if (!prefsFollowSystem.checked) currentThemeId = activeThemeId();
     followSystem = prefsFollowSystem.checked;
     applyActiveTheme();
     refreshThemeGridSelection();
-    await savePref(FOLLOW_SYSTEM_KEY, followSystem);
+    await saveThemeChoices(before, {
+      [FOLLOW_SYSTEM_KEY]: followSystem,
+      ...(followSystem ? {} : { [THEME_KEY]: currentThemeId }),
+    });
   });
 
   prefsLanguage.addEventListener("change", async () => {
@@ -1374,6 +1917,13 @@ function initPreferences(): void {
     setLocale(value as Locale);
     document.documentElement.lang = value;
     applyTranslations(document);
+    // Home, folder view, sidebar, breadcrumb and a few labels inside the
+    // document are built in JS: rebuild them in the new language.
+    relabelScreen();
+    // The outline hint, the theme sentence and the theme actions' labels are
+    // written in JS too.
+    buildThemeGrid();
+    syncPrefsUI();
     await savePref(LOCALE_KEY, value);
   });
 
@@ -1384,12 +1934,27 @@ function initPreferences(): void {
       filters: [{ name: "Theme JSON", extensions: ["json"] }],
     });
     if (!selected || typeof selected !== "string") return;
+    // An unreadable or invalid file, and a valid theme that could not be
+    // stored, are different problems: say which one happened.
+    let message: string | null = null;
+    let text: string | null = null;
     try {
-      const text = await readTextFile(selected);
-      const ok = await importCustomTheme(text);
-      if (!ok) throw new Error("invalid");
+      text = await readTextFile(selected);
     } catch {
-      prefsImportError.textContent = t("prefs.appearance.import.error");
+      message = t("prefs.appearance.import.error");
+    }
+    if (text !== null) {
+      try {
+        if (!(await importCustomTheme(text))) {
+          message = t("prefs.appearance.import.error");
+        }
+      } catch (e) {
+        console.warn("Theme import failed:", e);
+        message = t("prefs.appearance.import.saveError");
+      }
+    }
+    if (message) {
+      prefsImportError.textContent = message;
       prefsImportError.style.display = "inline";
     }
   });
@@ -1415,11 +1980,16 @@ function initPreferences(): void {
     recomputeEditorId();
   });
 
-  prefsFontSize.addEventListener("change", async () => {
-    const value = prefsFontSize.value as FontSize;
-    applyFontSize(value);
-    await savePref(FONTSIZE_KEY, value);
-  });
+  for (const btn of prefsFontSize.querySelectorAll<HTMLButtonElement>(
+    "button"
+  )) {
+    btn.addEventListener("click", async () => {
+      const value = btn.dataset.value as FontSize;
+      applyFontSize(value);
+      setSegmentActive(prefsFontSize, value);
+      await savePref(FONTSIZE_KEY, value);
+    });
+  }
 
   for (const btn of prefsOutline.querySelectorAll<HTMLButtonElement>(
     "button"
@@ -1427,25 +1997,21 @@ function initPreferences(): void {
     btn.addEventListener("click", async () => {
       const value = btn.dataset.value as OutlinePref;
       applyOutlinePref(value);
-      setSegmentActive(prefsOutline, value);
+      syncOutlineUI(value);
       await savePref(OUTLINE_PREF_KEY, value);
     });
   }
 
-  for (const btn of prefsFinderOpen.querySelectorAll<HTMLButtonElement>(
-    "button"
-  )) {
-    btn.addEventListener("click", async () => {
-      const value = btn.dataset.value as FinderOpenPref;
-      finderOpenPref = value;
-      setSegmentActive(prefsFinderOpen, value);
-      await savePref(FINDER_OPEN_KEY, value);
-    });
-  }
+  prefsFinderOpen.addEventListener("change", async () => {
+    const value = prefsFinderOpen.value as FinderOpenPref;
+    finderOpenPref = value;
+    await savePref(FINDER_OPEN_KEY, value);
+  });
 
-  prefsAdvancedToggle.addEventListener("click", () => {
-    const open = !prefsAdvanced.classList.contains("visible");
-    setAdvancedOpen(open);
+  prefsLaunch.addEventListener("change", async () => {
+    const value = prefsLaunch.value as LaunchPref;
+    launchPref = value;
+    await savePref(LAUNCH_KEY, value);
   });
 
   prefsBodyFont.addEventListener("change", async () => {
@@ -1506,7 +2072,7 @@ function initPreferences(): void {
 }
 
 async function initLocale(): Promise<void> {
-  const store = await load(STORE_FILE);
+  const store = await startupSettings();
   const saved = await store.get(LOCALE_KEY);
   const locale = resolveInitialLocale(saved, navigator.language);
   setLocale(locale);
@@ -1514,114 +2080,396 @@ async function initLocale(): Promise<void> {
   document.documentElement.lang = locale;
 }
 
+// --- Chrome: sidebar overlay, folder menu, outline popover ---
+
+const NARROW_SIDEBAR = 860;
+let sidebarOpener: HTMLElement | null = null;
+
+function setSidebarOpen(open: boolean): void {
+  const wasOpen = document.body.classList.contains("sidebar-open");
+  if (open === wasOpen) return;
+  document.body.classList.toggle("sidebar-open", open);
+  sidebarToggle.setAttribute("aria-expanded", String(open));
+  sidebarScrim.hidden = !open;
+  // While the panel covers the page, the page behind it is out of reach.
+  for (const el of [document.getElementById("titlebar"), docCard, folderViewEl]) {
+    if (el) el.inert = open;
+  }
+  if (open) {
+    sidebarEl.setAttribute("role", "dialog");
+    sidebarEl.setAttribute("aria-modal", "true");
+    sidebarOpener = document.activeElement as HTMLElement | null;
+    (sidebarEl.querySelector<HTMLElement>(".file-item.active, .file-item") ?? sidebarClose).focus();
+  } else {
+    sidebarEl.removeAttribute("role");
+    sidebarEl.removeAttribute("aria-modal");
+    focusVisible(sidebarOpener);
+    sidebarOpener = null;
+  }
+}
+
+/** Focus `el` if it is on screen, otherwise the document so focus is not lost. */
+function focusVisible(el: HTMLElement | null): void {
+  if (el && el.getClientRects().length > 0) {
+    el.focus();
+  } else if (activeScreen() === "doc") {
+    contentEl.focus({ preventScroll: true });
+  }
+}
+
+function setOutlineOpen(open: boolean): void {
+  document.body.classList.toggle("outline-open", open);
+  outlineToggle.setAttribute("aria-expanded", String(open));
+  if (open) outlineNav.querySelector<HTMLElement>(".outline-item")?.focus();
+}
+
+function closeFolderMenu(returnFocus = false): void {
+  folderMenuOpening = false;
+  if (folderMenu.hidden) return;
+  folderMenu.hidden = true;
+  folderSwitcher.setAttribute("aria-expanded", "false");
+  if (returnFocus) focusVisible(folderSwitcher);
+}
+
+/** Close every popover and panel; a new view never opens under one. */
+function closeTransientUI(): void {
+  closeFolderMenu();
+  setOutlineOpen(false);
+  setSidebarOpen(false);
+}
+
+function menuItem(
+  label: string,
+  onSelect: () => void,
+  shortcut?: string,
+  checked = false,
+  returnFocus = true
+): HTMLButtonElement {
+  const item = document.createElement("button");
+  item.type = "button";
+  item.className = "menu-item";
+  item.setAttribute("role", checked ? "menuitemradio" : "menuitem");
+  if (checked) item.setAttribute("aria-checked", "true");
+  const text = document.createElement("span");
+  text.className = "menu-item-label";
+  text.textContent = label;
+  item.append(text);
+  if (checked) item.insertAdjacentHTML("beforeend", icon("check", 14));
+  if (shortcut) {
+    const k = document.createElement("span");
+    k.className = "menu-item-shortcut mono";
+    k.textContent = shortcut;
+    item.append(k);
+  }
+  item.addEventListener("click", () => {
+    closeFolderMenu(returnFocus);
+    onSelect();
+  });
+  return item;
+}
+
+function menuSeparator(): HTMLElement {
+  const sep = document.createElement("div");
+  sep.className = "menu-sep";
+  sep.setAttribute("role", "separator");
+  return sep;
+}
+
+let folderMenuOpening = false;
+let folderMenuSeq = 0;
+
+async function openFolderMenu(): Promise<void> {
+  folderMenuOpening = true;
+  const seq = ++folderMenuSeq;
+  const recents = (await loadRecents()).filter((e) => e.kind === "folder").slice(0, 5);
+  // Closed (second click, Escape) or reopened while the recents were loading.
+  if (!folderMenuOpening || seq !== folderMenuSeq) return;
+  folderMenuOpening = false;
+  const items: HTMLElement[] = [];
+  if (recents.length > 0) {
+    const label = document.createElement("div");
+    label.className = "menu-label";
+    label.setAttribute("role", "presentation");
+    label.textContent = t("folderMenu.recents");
+    items.push(label);
+    for (const entry of recents) {
+      items.push(
+        menuItem(extractRootName(entry.path), () => void openFolderPath(entry.path), undefined, entry.path === rootPath)
+      );
+    }
+    items.push(menuSeparator());
+  }
+  items.push(menuItem(t("folderMenu.open"), () => void openFolder(), "⇧⌘O"));
+  items.push(menuItem(t("folderMenu.newWindow"), () => void openFolderInNewWindow(), "⇧⌘N"));
+  items.push(menuSeparator());
+  // Closing leads home, where the switcher is gone: focus goes to the page instead.
+  items.push(menuItem(t("folder.close"), closeFolder, "⇧⌘W", false, false));
+  folderMenu.replaceChildren(...items);
+  folderMenu.hidden = false;
+  folderSwitcher.setAttribute("aria-expanded", "true");
+  folderMenu.querySelector<HTMLElement>(".menu-item")?.focus();
+}
+
+folderMenu.addEventListener("keydown", (e) => {
+  const items = Array.from(folderMenu.querySelectorAll<HTMLElement>(".menu-item"));
+  const index = items.indexOf(document.activeElement as HTMLElement);
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    const step = e.key === "ArrowDown" ? 1 : -1;
+    items[(index + step + items.length) % items.length]?.focus();
+  } else if (e.key === "Home" || e.key === "End") {
+    e.preventDefault();
+    items[e.key === "Home" ? 0 : items.length - 1]?.focus();
+  } else if (e.key === "Escape") {
+    // Only the menu closes, not the sidebar panel it sits in.
+    e.preventDefault();
+    e.stopPropagation();
+    closeFolderMenu(true);
+  } else if (e.key === "Tab") {
+    // Leave from the switcher so Tab moves on from there.
+    closeFolderMenu(true);
+  }
+});
+
+document.addEventListener("click", (e) => {
+  const target = e.target as Node;
+  if (!folderMenu.hidden && !folderMenu.contains(target) && !folderSwitcher.contains(target)) {
+    closeFolderMenu();
+  }
+  if (
+    document.body.classList.contains("outline-open") &&
+    !outlineEl.contains(target) &&
+    !outlineToggle.contains(target)
+  ) {
+    setOutlineOpen(false);
+  }
+});
+
+document.addEventListener("keydown", (e) => {
+  // ⌘↑: up to the enclosing folder, as in the Finder — but never while typing.
+  if (e.key === "ArrowUp" && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && !isEditable(e.target)) {
+    if (!modalOpen() && rootPath !== null && activeScreen() !== "home") {
+      e.preventDefault();
+      goUp();
+    }
+    return;
+  }
+  if (e.key !== "Escape" || modalOpen() || e.defaultPrevented) return;
+  if (document.body.classList.contains("sidebar-open")) {
+    setSidebarOpen(false);
+  } else if (document.body.classList.contains("outline-open")) {
+    setOutlineOpen(false);
+    outlineToggle.focus();
+  }
+});
+
+/** Fields where ⌘↑ moves the caret or changes the value (not checkboxes or buttons). */
+function isEditable(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el) return false;
+  if (el.isContentEditable || el.tagName === "TEXTAREA" || el.tagName === "SELECT") return true;
+  if (el.tagName !== "INPUT") return false;
+  return !["checkbox", "radio", "button", "submit", "reset", "color", "range"].includes((el as HTMLInputElement).type);
+}
+
+function initChrome(): void {
+  navBackBtn.addEventListener("click", () => void nav.back());
+  navForwardBtn.addEventListener("click", () => void nav.forward());
+  navHomeBtn.addEventListener("click", goHome);
+  sidebarToggle.addEventListener("click", () => setSidebarOpen(!document.body.classList.contains("sidebar-open")));
+  sidebarClose.addEventListener("click", () => setSidebarOpen(false));
+  sidebarScrim.addEventListener("click", () => setSidebarOpen(false));
+  outlineToggle.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setOutlineOpen(!document.body.classList.contains("outline-open"));
+  });
+  searchToggle.addEventListener("click", () => {
+    document.body.classList.add("search-open");
+    focusSearch();
+  });
+  // Escape from the field's buttons folds it too (the field handles its own).
+  searchBoxEl.addEventListener("keydown", (e) => {
+    // Only when the field is folded open: otherwise Escape belongs to the
+    // other handlers (closing the outline popover…).
+    if (
+      e.key === "Escape" &&
+      e.target !== searchInput &&
+      !searchInput.value &&
+      document.body.classList.contains("search-open")
+    ) {
+      e.preventDefault();
+      foldSearch(true);
+    }
+  });
+
+  // Fold the compact field back on a click outside the search UI when there is
+  // no query. Not on focusout: WebKit does not focus buttons on click, so the
+  // field would fold under the pointer before its own buttons get the click.
+  document.addEventListener("pointerdown", (e) => {
+    if (!document.body.classList.contains("search-open") || searchInput.value) return;
+    const target = e.target as Node;
+    if (searchBoxEl.contains(target) || searchOptionsMenu.contains(target) || searchToggle.contains(target)) return;
+    foldSearch();
+  });
+  prefsBtn.addEventListener("click", openPrefs);
+  folderSwitcher.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (folderMenu.hidden && !folderMenuOpening) void openFolderMenu();
+    else closeFolderMenu(true);
+  });
+  window.addEventListener("resize", () => {
+    if (window.innerWidth > NARROW_SIDEBAR) setSidebarOpen(false);
+  });
+  // The window shows what other windows did meanwhile (recents, last read).
+  window.addEventListener("focus", () => {
+    if (activeScreen() === "home") void refreshHome();
+  });
+  syncNavButtons();
+}
+
+// --- Init ---
+
 async function init(): Promise<void> {
+  // 1. Preferences that decide where opens go, before anything can open.
+  // Nothing before the startup view may stop init (the window would stay
+  // empty): settings that cannot be read take their defaults.
+  const routingStore = await startupSettings();
+  finderOpenPref = resolveInitialFinderOpenPref(await routingStore.get(FINDER_OPEN_KEY));
+  launchPref = resolveInitialLaunchPref(await routingStore.get(LAUNCH_KEY));
+
+  // 2. Reserve the startup view: anything opened from now on wins over it.
+  const commitInitial = nav.reserveInitial();
+
+  // 3. Runtime opens (hot-start file association, "Open With", CLI events) and menus.
+  await Promise.all([
+    appWindow.listen<string>("open-folder", (event) => {
+      void openFolderPath(event.payload);
+    }),
+    appWindow.listen<string>("open-file", (event) => {
+      // The backend routes this to the frontmost window only. Reusing it would
+      // discard whatever that window holds, so by default hand the document to
+      // a new window — unless this one is empty, where spawning would just
+      // leave an empty window behind.
+      if (finderOpenPref === "new-window" && windowInUse()) {
+        void invoke("open_new_window", { path: event.payload }).catch((e) => {
+          console.warn("Failed to open a new window, reusing this one:", e);
+          void openFileFromPath(event.payload);
+        });
+        return;
+      }
+      void openFileFromPath(event.payload);
+    }),
+    appWindow.listen("menu-open-folder", () => openFolder()),
+    appWindow.listen("menu-open-file", () => openFile()),
+    appWindow.listen("menu-open-folder-new-window", () => openFolderInNewWindow()),
+    appWindow.listen("menu-print", () => printDocument()),
+    appWindow.listen("menu-export-pdf", () => exportPdf()),
+    appWindow.listen("menu-toggle-theme", () => toggleTheme()),
+    appWindow.listen<RecentEntry>("menu-open-recent", (event) => openRecent(event.payload)),
+    appWindow.listen("menu-clear-recent", () => clearRecents()),
+    appWindow.listen("menu-open-preferences", () => openPrefs()),
+    appWindow.listen("menu-find", () => focusSearch()),
+    appWindow.listen<string>("menu-nav", (event) => handleNavCommand(event.payload)),
+    getCurrentWebview().onDragDropEvent((event) => {
+      document.body.classList.toggle("drag-over", event.payload.type === "over" || event.payload.type === "enter");
+      if (event.payload.type === "drop" && event.payload.paths.length > 0) {
+        void openDroppedPath(event.payload.paths[0]);
+      }
+    }),
+  ]);
+
+  // 4. The rest of the window.
   await initLocale();
   await initTheme();
   initSearch();
   initPreferences();
-
-  // Runtime opens (hot-start file association, "Open With", CLI events)
-  appWindow.listen<string>("open-folder", (event) => {
-    setRootPath(event.payload);
-  });
-  appWindow.listen<string>("open-file", (event) => {
-    // The backend routes this to the frontmost window only. Reusing it would
-    // discard whatever that window was showing, so by default hand the document
-    // to a new window — unless this one is still on the welcome screen, where
-    // spawning would just leave an empty window behind.
-    if (finderOpenPref === "new-window" && activeFile !== null) {
-      void invoke("open_new_window", { path: event.payload }).catch((e) => {
-        console.warn("Failed to open a new window, reusing this one:", e);
-        openFileFromPath(event.payload);
-      });
-      return;
-    }
-    openFileFromPath(event.payload);
-  });
-  appWindow.listen("menu-open-folder", () => {
-    openFolder();
-  });
-  appWindow.listen("menu-open-file", () => {
-    openFile();
-  });
-  appWindow.listen("menu-open-folder-new-window", () => {
-    openFolderInNewWindow();
-  });
-  appWindow.listen("menu-print", () => {
-    printDocument();
-  });
-  appWindow.listen("menu-export-pdf", () => {
-    exportPdf();
-  });
-  appWindow.listen("menu-toggle-theme", () => {
-    toggleTheme();
-  });
-  appWindow.listen<RecentEntry>("menu-open-recent", (event) => {
-    if (event.payload.kind === "file") {
-      openFileFromPath(event.payload.path);
-    } else {
-      setRootPath(event.payload.path);
-    }
-  });
-  appWindow.listen("menu-clear-recent", () => {
-    clearRecents();
-  });
-  appWindow.listen("menu-open-preferences", () => {
-    openPrefs();
-  });
-  appWindow.listen("menu-find", () => {
-    focusSearch();
-  });
+  initChrome();
 
   // Populate the native "Open Recent" submenu from the persisted list.
-  await syncRecentMenu(await loadRecents());
+  await loadRecents()
+    .then(syncRecentMenu)
+    .catch((e) => console.warn("Open Recent not filled:", e));
 
-  // Pull anything the backend buffered for *this* window: a CLI arg, a
-  // RunEvent::Opened that fired before our listener was registered, or the
-  // folder handed to a window spawned from the File menu.
+  // 5. The startup view. Pull anything the backend buffered for *this* window:
+  // a CLI arg, a RunEvent::Opened that fired before our listener was
+  // registered, or the folder handed to a window spawned from the File menu.
   const pending = await invoke<PendingOpen | null>("get_pending_open");
-  const view = resolveInitialView(pending, await loadRootPath());
+  const lastFolder = await loadRootPath().catch((e) => (console.warn("Last folder unreadable:", e), null));
+  const view = resolveInitialView(pending, lastFolder, launchPref === "last-folder");
+  let target: NavEntry = { kind: "home", rootPath: null, dir: [] };
+  let savedStatus = "dir";
   if (view.kind === "file") {
-    await openFileFromPath(view.path);
+    const sep = view.path.lastIndexOf("/");
+    target = docEntry(view.path.substring(0, sep), view.path.substring(sep + 1));
   } else if (view.kind === "folder") {
-    await setRootPath(view.path);
+    // The last folder may be gone since (deleted, unmounted volume): then home.
+    // "denied" or "error" still opens it: the folder view says what is wrong.
+    const fromSaved = pending?.kind !== "folder";
+    // Bounded like the home screen's checks: a network volume that does not
+    // answer must not hold startup on this check. "unknown" opens the folder
+    // (its listing is not bounded: the window shows it loading, and its menus
+    // and Home stay usable).
+    savedStatus = fromSaved ? await pathStatus(view.path, PATH_STATUS_TIMEOUT) : "dir";
+    if (savedStatus !== "missing" && savedStatus !== "file" && savedStatus !== "other") {
+      target = { kind: "folder", rootPath: view.path, dir: [] };
+    }
   }
-  // "welcome": nothing to do, the empty state is what index.html starts on.
+  const ok = await commitInitial(target);
+  if (ok && target.kind === "doc" && target.rootPath) {
+    await saveRootPath(target.rootPath);
+    await recordRecent(`${target.rootPath}/${target.file}`, "file");
+  }
+  // A folder that cannot be read is shown (its view says why) but not promoted.
+  if (
+    ok &&
+    target.kind === "folder" &&
+    target.rootPath &&
+    savedStatus === "dir" &&
+    committedListing?.status === "ok"
+  ) {
+    await saveRootPath(target.rootPath);
+    await recordRecent(target.rootPath, "folder");
+  }
+  // A startup view that failed, or was overtaken by an open that failed, falls
+  // back to home through the navigator's onNothingShown.
 }
 
-async function setRootPath(path: string, fileToOpen?: string): Promise<void> {
-  rootPath = path;
-  rootName = extractRootName(path);
-  currentPath = [];
-  activeFile = null;
-  await saveRootPath(path);
-  if (fileToOpen) {
-    await recordRecent(`${path}/${fileToOpen}`, "file");
-  } else {
-    await recordRecent(path, "folder");
-  }
-  await renderSidebar();
-  if (fileToOpen) {
-    await loadFile(fileToOpen);
-  } else {
-    await autoSelectReadme();
-  }
+/** A window holds something the reader may want to keep: a folder, or an open in progress. */
+function windowInUse(): boolean {
+  return rootPath !== null || nav.pending() > 0;
 }
 
 async function openFolder(): Promise<void> {
   const selected = await open({ directory: true, multiple: false });
-  if (selected) {
-    await setRootPath(selected);
+  if (typeof selected === "string") {
+    await openFolderPath(selected);
   }
 }
 
 async function openFile(): Promise<void> {
   const selected = await open({
     multiple: false,
-    filters: [{ name: "Markdown", extensions: ["md", "markdown", "mdx"] }],
+    filters: [{ name: "Markdown", extensions: MARKDOWN_EXTENSIONS }],
   });
   if (typeof selected === "string") {
     await openFileFromPath(selected);
+  }
+}
+
+function openRecent(entry: RecentEntry): void {
+  if (entry.kind === "file") {
+    void openFileFromPath(entry.path);
+  } else {
+    void openFolderPath(entry.path);
+  }
+}
+
+async function openDroppedPath(path: string): Promise<void> {
+  const status = await invoke<string>("path_status", { path }).catch(() => "error");
+  if (status === "dir") {
+    await openFolderPath(path);
+  } else if (status === "file" && isMarkdownName(path)) {
+    await openFileFromPath(path);
   }
 }
 
@@ -1638,115 +2486,762 @@ async function openFolderInNewWindow(): Promise<void> {
   }
 }
 
-// --- Filesystem ---
+// --- Navigation commands ---
 
-async function listEntries(dirPath: string): Promise<Entry[]> {
-  const entries = await readDir(dirPath);
-  return filterAndSortEntries(entries);
+function goHome(): void {
+  void nav.navigate({ kind: "home", rootPath, dir: [] });
 }
 
-// --- Sidebar ---
-
-async function renderSidebar(): Promise<void> {
-  const dirPath = getFullPath(rootPath!, currentPath);
-  const entries = await listEntries(dirPath);
-  fileList.innerHTML = "";
-
-  emptyState.style.display = "none";
-  markdownEl.style.display = activeFile ? "block" : "none";
-  if (!activeFile) {
-    emptyState.style.display = "block";
-    contentEl.classList.add("empty");
-    titlebarFilename.textContent = "";
-    syncWindowTitle();
-    setSearchEnabled(false);
-  }
-
-  if (currentPath.length > 0) {
-    const back = document.createElement("div");
-    back.className = "file-item";
-    const backIcon = document.createElement("span");
-    backIcon.className = "icon";
-    backIcon.textContent = "..";
-    const backName = document.createElement("span");
-    backName.className = "name";
-    backName.textContent = t("sidebar.parent");
-    back.append(backIcon, backName);
-    back.addEventListener("click", () => {
-      currentPath.pop();
-      renderSidebar();
-    });
-    fileList.appendChild(back);
-  }
-
-  for (const entry of entries) {
-    const item = document.createElement("div");
-    item.className = "file-item";
-    const icon = entry.kind === "directory" ? "\u{1F4C1}" : "\u{1F4C4}";
-    item.innerHTML = `<span class="icon">${icon}</span><span class="name">${entry.name}</span>`;
-
-    if (entry.kind === "directory") {
-      item.addEventListener("click", () => {
-        currentPath.push(entry.name);
-        renderSidebar();
-      });
-    } else {
-      const filePath = [...currentPath, entry.name].join("/");
-      if (filePath === activeFile) item.classList.add("active");
-      item.addEventListener("click", () => loadFile(filePath));
+function closeFolder(): void {
+  const closed = rootPath;
+  void nav.navigate({ kind: "home", rootPath: null, dir: [] }).then((ok) => {
+    // A folder closed on purpose is not reopened at the next launch.
+    if (ok && closed) void forgetRootPath(closed).catch((e) => console.warn("Could not forget the folder:", e));
+    // The control that closed it (banner, folder menu) is gone: land on Home.
+    const focused = document.activeElement as HTMLElement | null;
+    if (ok && (!focused || focused === document.body || focused.getClientRects().length === 0)) {
+      navHomeBtn.focus();
     }
-    fileList.appendChild(item);
-  }
-  renderBreadcrumb();
-}
-
-function renderBreadcrumb(): void {
-  breadcrumb.innerHTML = "";
-
-  const changeBtn = document.createElement("span");
-  changeBtn.textContent = "\u21C4";
-  changeBtn.title = t("breadcrumb.change");
-  changeBtn.style.cssText =
-    "cursor:pointer;font-size:14px;margin-right:4px;opacity:0.6;";
-  changeBtn.addEventListener("click", openFolder);
-  breadcrumb.appendChild(changeBtn);
-
-  const root = document.createElement("span");
-  root.textContent = rootName;
-  if (currentPath.length > 0) {
-    root.addEventListener("click", () => {
-      currentPath = [];
-      renderSidebar();
-    });
-  } else {
-    root.classList.add("current");
-  }
-  breadcrumb.appendChild(root);
-
-  currentPath.forEach((part, i) => {
-    breadcrumb.appendChild(document.createTextNode(" / "));
-    const span = document.createElement("span");
-    span.textContent = part;
-    if (i < currentPath.length - 1) {
-      span.addEventListener("click", () => {
-        currentPath = currentPath.slice(0, i + 1);
-        renderSidebar();
-      });
-    } else {
-      span.classList.add("current");
-    }
-    breadcrumb.appendChild(span);
   });
 }
 
-// --- File loading ---
-
-async function autoSelectReadme(): Promise<void> {
-  const dirPath = getFullPath(rootPath!, currentPath);
-  const entries = await listEntries(dirPath);
-  const readme = findReadme(entries);
-  if (readme) await loadFile([...currentPath, readme.name].join("/"));
+/** ⌘↑: from a document to its folder, from a folder to its parent. */
+function goUp(): void {
+  if (rootPath === null) return;
+  const screen = activeScreen();
+  if (screen === "doc") {
+    void nav.navigate({ kind: "folder", rootPath, dir: [...currentPath] });
+  } else if (screen === "folder" && currentPath.length > 0) {
+    void nav.navigate({ kind: "folder", rootPath, dir: currentPath.slice(0, -1) });
+  }
 }
+
+function handleNavCommand(step: string): void {
+  if (modalOpen()) return;
+  if (step === "back") void nav.back();
+  else if (step === "forward") void nav.forward();
+  else if (step === "home") goHome();
+  else if (step === "up") goUp();
+  else if (step === "close_folder") closeFolder();
+}
+
+/** Preferences, a theme dialog, a lightbox or a diagram is in front: leave the page alone. */
+function modalOpen(): boolean {
+  return Boolean(document.querySelector(".prefs-backdrop.visible, .image-overlay, .mermaid-overlay"));
+}
+
+// --- Filesystem ---
+
+async function listDirectory(root: string, dir: string[]): Promise<Listing> {
+  try {
+    return summarizeListing(await readDir(getFullPath(root, dir)));
+  } catch (e) {
+    return { status: listingStatusFromError(e), rawCount: 0, entries: [] };
+  }
+}
+
+// One listing per folder visit, shared by the sidebar, the folder view and the
+// README lookup. Moving between documents of the same folder reuses it, so a
+// cloud-synced folder is not listed again on every click.
+let listingCache: { key: string; listing: Listing } | null = null;
+
+async function listForNavigation(root: string, dir: string[], fresh: boolean): Promise<Listing> {
+  const key = getFullPath(root, dir);
+  if (!fresh && listingCache?.key === key && listingCache.listing.status === "ok") {
+    return listingCache.listing;
+  }
+  const listing = await listDirectory(root, dir);
+  listingCache = { key, listing };
+  return listing;
+}
+
+/** How long the home screen waits on a path's status (network volumes can hang). */
+const PATH_STATUS_TIMEOUT = 800;
+
+/** "unknown" when the volume took too long to answer. */
+async function pathStatus(path: string, timeoutMs?: number): Promise<string> {
+  const status = invoke<string>("path_status", { path }).catch(() => "error");
+  if (timeoutMs === undefined) return status;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<string>((resolve) => {
+    timer = setTimeout(() => resolve("unknown"), timeoutMs);
+  });
+  try {
+    return await Promise.race([status, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// --- Navigator ---
+
+type Prepared =
+  | { kind: "home"; home: HomeData }
+  | { kind: "folder"; listing: Listing; readme: string | null }
+  | { kind: "same-doc" }
+  | {
+      kind: "doc";
+      html: string;
+      fullPath: string;
+      slow: boolean;
+      listing: Listing;
+      readme: string | null;
+      timings: DocTimings;
+    };
+
+interface DocTimings {
+  start: number;
+  ping: number;
+  read: number;
+  parse: number;
+  images?: number;
+  dom?: number;
+  outline?: number;
+}
+
+type Built =
+  | { kind: "home"; node: HTMLElement }
+  | { kind: "folder"; node: HTMLElement; sidebar: HTMLElement; count: number; listing: Listing }
+  | { kind: "same-doc" }
+  | {
+      kind: "doc";
+      node: DocumentFragment;
+      sidebar: HTMLElement;
+      count: number;
+      listing: Listing;
+      title: string;
+      slow: boolean;
+      timings: DocTimings;
+    };
+
+type Screen = "home" | "folder" | "doc";
+
+function activeScreen(): Screen {
+  return (document.body.dataset.screen as Screen) ?? "home";
+}
+
+let currentDocTitle = "";
+
+/**
+ * `tolerant`: home is where a window falls back when nothing else opens, so
+ * opening it must not fail — an unreadable store gives an empty home. A refresh
+ * of a home already on screen is not tolerant: it keeps what is shown instead.
+ */
+async function buildHomeData(keptRoot: string | null, tolerant: boolean): Promise<HomeData> {
+  const orEmpty = <T>(read: Promise<T>, empty: T, what: string): Promise<T> =>
+    tolerant ? read.catch((e) => (console.warn(`${what} unreadable:`, e), empty)) : read;
+  const [recents, lastRead] = await Promise.all([
+    orEmpty(loadRecents(), [] as RecentEntry[], "Recents"),
+    orEmpty(loadLastRead(), null, "Last read"),
+  ]);
+  // Both checks at once, and bounded: the home screen must not wait on a slow
+  // volume. A path that did not answer in time is offered as is; opening it
+  // reports the failure if there is one.
+  const [resumeStatus, keptStatus] = await Promise.all([
+    lastRead ? pathStatus(`${lastRead.rootPath}/${lastRead.file}`, PATH_STATUS_TIMEOUT) : null,
+    keptRoot ? pathStatus(keptRoot, PATH_STATUS_TIMEOUT) : null,
+  ]);
+  let resume: HomeData["resume"] = null;
+  if (lastRead) {
+    const status = resumeStatus;
+    resume = {
+      title: lastRead.title,
+      file: lastRead.file,
+      rootName: extractRootName(lastRead.rootPath),
+      status:
+        status === "file" || status === "unknown"
+          ? "ok"
+          : status === "denied" || status === "error"
+            ? "denied"
+            : "missing",
+    };
+  }
+  let kept: HomeData["kept"] = null;
+  if (keptRoot) {
+    kept = { name: extractRootName(keptRoot), accessible: keptStatus === "dir" || keptStatus === "unknown" };
+  }
+  return { firstRun: recents.length === 0 && !lastRead, kept, resume, recents };
+}
+
+async function prepare(target: NavEntry, _stale: () => boolean, options: { reload: boolean }): Promise<Prepared> {
+  if (target.kind === "home") {
+    return { kind: "home", home: await buildHomeData(target.rootPath, true) };
+  }
+  const root = target.rootPath!;
+  if (target.kind === "folder") {
+    const loading = showLoadingSoon();
+    try {
+      const listing = await listForNavigation(root, target.dir, true);
+      return { kind: "folder", listing, readme: findReadme(listing.entries)?.name ?? null };
+    } finally {
+      hideLoading(loading);
+    }
+  }
+  // Same document, another heading: no need to read or render it again.
+  if (!options.reload && activeScreen() === "doc" && root === rootPath && target.file === activeFile) {
+    return { kind: "same-doc" };
+  }
+  const fullPath = `${root}/${target.file}`;
+  const loading = showLoadingSoon();
+  try {
+    const t0 = performance.now();
+    if (debugOverlay.isVisible()) await invoke("ping");
+    const t1 = performance.now();
+    const [{ text, slow }, listing] = await Promise.all([
+      readDocumentText(fullPath, root),
+      listForNavigation(root, target.dir, options.reload),
+    ]);
+    const t2 = performance.now();
+    const html = parseMarkdown(text);
+    const t3 = performance.now();
+    return {
+      kind: "doc",
+      html,
+      fullPath,
+      slow,
+      listing,
+      readme: findReadme(listing.entries)?.name ?? null,
+      timings: { start: t0, ping: t1 - t0, read: t2 - t1, parse: t3 - t2 },
+    };
+  } finally {
+    hideLoading(loading);
+  }
+}
+
+const fileCount = (listing: Listing) => listing.entries.filter((e) => e.kind === "file").length;
+
+/** Open an entry listed in `dir` of the folder `root`: its folder view, or the document. */
+function openEntry(root: string, dir: string[], entry: Entry): void {
+  const path = [...dir, entry.name];
+  if (entry.kind === "directory") void nav.navigate({ kind: "folder", rootPath: root, dir: path });
+  else void openDocument(root, path.join("/"));
+}
+
+/** The sidebar for a folder of the open root. */
+function sidebarNode(root: string, dir: string[], listing: Listing, activeName: string | null, readme: string | null) {
+  return buildFileList(listing, dir.length > 0, activeName, findReadmeName(listing, readme), {
+    open: (entry) => openEntry(root, dir, entry),
+    up: () => void nav.navigate({ kind: "folder", rootPath: root, dir: dir.slice(0, -1) }),
+  });
+}
+
+function findReadmeName(listing: Listing, readme: string | null): string | null {
+  return readme ?? findReadme(listing.entries)?.name ?? null;
+}
+
+function folderViewNode(root: string, dir: string[], listing: Listing, knownReadme: string | null): HTMLElement {
+  const readme = findReadmeName(listing, knownReadme);
+  const readmePath = readme ? [...dir, readme].join("/") : null;
+  return buildFolderView(
+    { rootName: extractRootName(root), dir, listing, readme },
+    {
+      open: (entry) => openEntry(root, dir, entry),
+      openReadme: () => {
+        if (readmePath) void openDocument(root, readmePath);
+      },
+      openOther: () => void openFolder(),
+    }
+  );
+}
+
+function build(p: Prepared, ctx: CommitContext): Built {
+  const target = ctx.target;
+  if (p.kind === "home") {
+    homeDataKey = JSON.stringify(p.home);
+    shownHomeData = p.home;
+    return {
+      kind: "home",
+      node: buildHome(p.home, {
+        resume: () => void resumeReading(),
+        openFolder: () => void openFolder(),
+        openFile: () => void openFile(),
+        openExamples: () => void openExamples(),
+        openRecent,
+        clearRecents: () => void clearRecents(),
+        returnToFolder: () => {
+          if (target.rootPath) void nav.navigate(returnTarget(nav.state(), target.rootPath));
+        },
+        closeFolder,
+        openResumeFolder: () => void openResumeFolder(),
+      }),
+    };
+  }
+  if (p.kind === "same-doc") return { kind: "same-doc" };
+
+  const root = target.rootPath!;
+
+  if (p.kind === "folder") {
+    return {
+      kind: "folder",
+      node: folderViewNode(root, target.dir, p.listing, p.readme),
+      sidebar: sidebarNode(root, target.dir, p.listing, null, p.readme),
+      count: fileCount(p.listing),
+      listing: p.listing,
+    };
+  }
+
+  const container = document.createElement("div");
+  container.innerHTML = p.html;
+  const tImages = performance.now();
+  resolveImagePaths(container, p.fullPath);
+  p.timings.images = performance.now() - tImages;
+  addCopyButtons(container);
+  addImageLightbox(container, openImageOverlay);
+  interceptLinks(container, root, target.dir);
+  const fileName = target.file!.split("/").pop()!;
+  const title = container.querySelector("h1")?.textContent?.trim() || fileName;
+  // Moved off-page here so publishing is a single append, whatever the size
+  // (spreading the children into one call overflows on huge documents).
+  const content = document.createDocumentFragment();
+  while (container.firstChild) content.append(container.firstChild);
+  return {
+    kind: "doc",
+    node: content,
+    sidebar: sidebarNode(root, target.dir, p.listing, fileName, p.readme),
+    count: fileCount(p.listing),
+    listing: p.listing,
+    title,
+    slow: p.slow,
+    timings: p.timings,
+  };
+}
+
+function publish(b: Built, ctx: CommitContext): void {
+  try {
+    publishView(b, ctx);
+  } catch (e) {
+    // The swap must not leave the window half-updated; report and keep going.
+    console.error("Failed to publish the view:", e);
+  }
+  syncNavButtons();
+}
+
+// What the last commit put on screen, for the decorations that follow it.
+let lastCommit: { sameDoc: boolean; timings: DocTimings | null; at: number } = {
+  sameDoc: false,
+  timings: null,
+  at: 0,
+};
+// Bumped on every commit: an async home refresh only lands on the view it started from.
+let viewToken = 0;
+// The listing the sidebar on screen was built from (never a superseded one).
+let committedListing: Listing | null = null;
+
+function publishView(b: Built, ctx: CommitContext): void {
+  const target = ctx.target;
+  viewToken += 1;
+  closeTransientUI();
+  hideLoadError();
+  // Whatever was still loading has been superseded by this commit.
+  endLoadingIndicator();
+  lastCommit = {
+    sameDoc: b.kind === "same-doc",
+    timings: b.kind === "doc" ? b.timings : lastCommit.timings,
+    at: b.kind === "same-doc" ? lastCommit.at : Date.now(),
+  };
+  if (b.kind === "same-doc") return;
+
+  rootPath = target.rootPath;
+  rootName = rootPath ? extractRootName(rootPath) : "";
+  currentPath = [...target.dir];
+  activeFile = target.kind === "doc" ? target.file! : null;
+  document.body.dataset.screen = target.kind;
+  document.body.classList.toggle("has-folder", rootPath !== null);
+
+  homeEl.hidden = b.kind !== "home";
+  folderViewEl.hidden = b.kind !== "folder";
+  docCard.hidden = b.kind !== "doc";
+
+  if (b.kind === "home") {
+    homeEl.replaceChildren(b.node);
+    homeEl.scrollTop = 0;
+  } else {
+    committedListing = b.listing;
+    folderSwitcherName.textContent = rootName;
+    folderSwitcherPath.textContent = rootPath ? parentLabel(rootPath) : "";
+    folderSwitcher.title = rootPath ?? "";
+    sidebarCount.textContent = String(b.count);
+    fileList.replaceChildren(b.sidebar);
+  }
+
+  if (b.kind === "folder") {
+    folderViewEl.replaceChildren(b.node);
+  }
+
+  if (b.kind === "doc") {
+    docDecorated = false;
+    currentDocTitle = b.title;
+    const tDom = performance.now();
+    markdownEl.replaceChildren(b.node);
+    slowReadNotice.hidden = !(b.slow && !slowReadDismissed);
+    const tOutline = performance.now();
+    buildOutline();
+    b.timings.dom = tOutline - tDom;
+    b.timings.outline = performance.now() - tOutline;
+    // The search index points into the content just replaced: drop it until
+    // the decorations (Mermaid) are done, then rebuild it. The query stays.
+    searchController?.suspend();
+    setSearchEnabled(false);
+  } else {
+    currentDocTitle = "";
+    markdownEl.replaceChildren();
+    if (scrollObserver) scrollObserver.disconnect();
+    searchController?.suspend();
+    setSearchEnabled(false);
+  }
+
+  breadcrumb.replaceChildren(
+    rootPath && b.kind !== "home"
+      ? buildBreadcrumb(rootName, currentPath, activeFile ? activeFile.split("/").pop()! : null, b.kind === "folder", (depth) => {
+          void nav.navigate({ kind: "folder", rootPath: rootPath!, dir: currentPath.slice(0, depth) });
+        })
+      : document.createDocumentFragment()
+  );
+  const docShown = b.kind === "doc";
+  printBtn.disabled = !docShown;
+  pdfBtn.disabled = !docShown;
+  syncWindowTitle();
+}
+
+// False from a document's commit until its decorations are done. A heading jump
+// committed in between takes over the unfinished work instead of skipping it.
+let docDecorated = true;
+
+async function decorate(ctx: DecorationContext): Promise<void> {
+  const screen = ctx.target.kind;
+  if (screen === "doc" && lastCommit.sameDoc) {
+    // A heading of the document already on screen: go there now.
+    applyPositioning(contentEl, ctx.positioning);
+    if (docDecorated) return;
+    // The previous view's decorations were cut short: finish them, then
+    // settle the position again (diagrams change the page's height) unless
+    // the reader has scrolled meanwhile.
+  }
+  if (screen === "doc") {
+    // Fresh document: put the reader in place right away (not at the previous
+    // document's offset); the position is settled again once diagrams and
+    // images have their final height, unless the reader scrolled meanwhile.
+    if (!lastCommit.sameDoc) applyPositioning(contentEl, ctx.positioning);
+    const timings = lastCommit.timings;
+    const tMermaid = performance.now();
+    try {
+      await renderMermaidDiagrams(ctx.isCurrent);
+    } catch (e) {
+      console.warn("Diagrams failed to render:", e);
+    }
+    if (!ctx.isCurrent()) return;
+    const mermaidMs = performance.now() - tMermaid;
+    // A restored position (and a heading below images) is only right once
+    // images have their real height.
+    if (ctx.positioning.mode !== "top") await imagesSettled(markdownEl, 1500);
+    if (!ctx.isCurrent()) return;
+    if (!userScrolledSincePositioning) applyPositioning(contentEl, ctx.positioning);
+    setSearchEnabled(true);
+    searchController?.reset({
+      scroll: !lastCommit.sameDoc && !ctx.traversal && ctx.positioning.mode === "top",
+    });
+    if (timings) {
+      debugOverlay.recordOpen({
+        file: ctx.target.file?.split("/").pop() ?? "",
+        total: performance.now() - timings.start,
+        phases: {
+          ping: timings.ping,
+          read: timings.read,
+          parse: timings.parse,
+          images: timings.images ?? 0,
+          mermaid: mermaidMs,
+          dom: timings.dom ?? 0,
+          outline: timings.outline ?? 0,
+        },
+      });
+    }
+    docDecorated = true;
+    if (rootPath && activeFile) {
+      // Dated when the document was opened, not when its diagrams finished.
+      void writeLastRead({
+        rootPath,
+        file: activeFile,
+        title: currentDocTitle,
+        scrollTop: contentEl.scrollTop,
+        at: lastCommit.at,
+      });
+    }
+    return;
+  }
+  const scroller = screen === "home" ? homeEl : folderViewEl;
+  applyPositioning(scroller, ctx.positioning);
+}
+
+// Scrolls done by the app (restoring a position, jumping to a heading) must not
+// count as reading activity; only the reader's own scrolling updates "lastRead".
+let programmaticScroll = false;
+let programmaticTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Scrolls about to happen are the app's doing; `scrollend` (or a timer) ends the window. */
+function markProgrammaticScroll(ms = 400): void {
+  programmaticScroll = true;
+  if (programmaticTimer !== null) clearTimeout(programmaticTimer);
+  programmaticTimer = setTimeout(() => {
+    programmaticScroll = false;
+  }, ms);
+}
+
+// Set when the reader scrolls after the app positioned the page; a late
+// re-positioning (diagrams finished) must then leave them alone.
+let userScrolledSincePositioning = false;
+
+function applyPositioning(scroller: HTMLElement, positioning: Positioning): void {
+  userScrolledSincePositioning = false;
+  markProgrammaticScroll();
+  if (positioning.mode === "anchor") {
+    // A link to a heading that does not exist leaves the reader where they are.
+    markdownEl.querySelector(`#${CSS.escape(positioning.anchor)}`)?.scrollIntoView({ block: "start" });
+  } else if (positioning.mode === "restore") {
+    scroller.scrollTop = positioning.scrollTop;
+  } else {
+    scroller.scrollTop = 0;
+  }
+}
+
+function endProgrammaticScroll(): void {
+  programmaticScroll = false;
+  if (programmaticTimer !== null) clearTimeout(programmaticTimer);
+  programmaticTimer = null;
+}
+
+contentEl.addEventListener("scrollend", endProgrammaticScroll);
+
+// The reader's own input: whatever scroll follows is theirs, even inside the
+// window the app opened for its own scrolls (which a scroll event alone cannot
+// tell apart: a position already in place fires none, a clamped one fires late).
+const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
+for (const type of ["wheel", "touchstart", "pointerdown"] as const) {
+  contentEl.addEventListener(type, endProgrammaticScroll, { passive: true });
+}
+document.addEventListener("keydown", (e) => {
+  // Keys typed in a field (search, dialogs) scroll nothing.
+  // Space on a button presses it (on a link, it scrolls).
+  const target = e.target as HTMLElement | null;
+  const field = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])';
+  if (target?.closest(field) || modalOpen()) return;
+  if (e.key === " " && target?.closest("button")) return;
+  if (SCROLL_KEYS.has(e.key) && activeScreen() === "doc") endProgrammaticScroll();
+});
+
+contentEl.addEventListener("scroll", () => {
+  if (programmaticScroll) return;
+  userScrolledSincePositioning = true;
+  if (activeScreen() !== "doc" || !rootPath || !activeFile) return;
+  scheduleLastRead({
+    rootPath,
+    file: activeFile,
+    title: currentDocTitle,
+    scrollTop: contentEl.scrollTop,
+    at: Date.now(),
+  });
+});
+
+/** Resolves once the images of `root` have loaded (or failed), or after `timeoutMs`. */
+function imagesSettled(root: HTMLElement, timeoutMs: number): Promise<void> {
+  const pending = Array.from(root.querySelectorAll("img")).filter((img) => !img.complete);
+  if (pending.length === 0) return Promise.resolve();
+  const loads = pending.map(
+    (img) =>
+      new Promise<void>((resolve) => {
+        img.addEventListener("load", () => resolve(), { once: true });
+        img.addEventListener("error", () => resolve(), { once: true });
+      })
+  );
+  return Promise.race([
+    Promise.all(loads).then(() => undefined),
+    new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
+  ]);
+}
+
+function captureScroll(): number {
+  const screen = activeScreen();
+  if (screen === "doc") return contentEl.scrollTop;
+  if (screen === "folder") return folderViewEl.scrollTop;
+  return homeEl.scrollTop;
+}
+
+// The latest open that failed, for the home screen a window falls back to.
+let lastFailedTarget: NavEntry | null = null;
+
+function onNavigationError(error: unknown, target: NavEntry): void {
+  console.error("Failed to open:", target, error);
+  lastFailedTarget = target;
+  showLoadError(target);
+}
+
+/**
+ * Every open at startup failed or was overtaken by one that failed (a Finder
+ * open of an unreadable file, say): show home so the window stays usable, and
+ * say why. Home does not fail in practice (buildHomeData falls back to empty
+ * data); if it ever did, trying it again would only loop.
+ */
+function onNothingShown(): void {
+  const failed = lastFailedTarget;
+  if (failed?.kind === "home") return;
+  void nav.navigate({ kind: "home", rootPath: null, dir: [] }).then((shown) => {
+    // The home commit cleared the banner: tell the reader why they are here.
+    if (shown && failed) showLoadError(failed);
+  });
+}
+
+function showLoadError(target: NavEntry): void {
+  // Surface the failure. A console-only error made a whole class of unopenable
+  // files look like an unresponsive click: the sidebar listed them, selecting
+  // one simply did nothing.
+  const name = target.file?.split("/").pop() ?? target.rootPath ?? "";
+  loadErrorText.textContent = t("loadError.message").replace("{file}", name);
+  loadError.hidden = false;
+  if (activeScreen() !== "doc") {
+    // The banner lives in the document card; on other screens show it on top.
+    document.body.classList.add("show-load-error");
+    if (loadErrorTimer !== null) clearTimeout(loadErrorTimer);
+    loadErrorTimer = setTimeout(hideLoadError, 5000);
+  }
+}
+
+let loadErrorTimer: ReturnType<typeof setTimeout> | null = null;
+
+function hideLoadError(): void {
+  if (loadErrorTimer !== null) clearTimeout(loadErrorTimer);
+  loadErrorTimer = null;
+  loadError.hidden = true;
+  document.body.classList.remove("show-load-error");
+}
+
+const nav: WindowNavigator = createNavigator<Prepared, Built>({
+  prepare,
+  build,
+  publish,
+  captureScroll,
+  decorate,
+  onError: onNavigationError,
+  onNothingShown,
+});
+
+function syncNavButtons(): void {
+  const state = nav.state();
+  navBackBtn.disabled = !state.canBack;
+  navForwardBtn.disabled = !state.canForward;
+  const home = state.current?.kind === "home";
+  navHomeBtn.classList.toggle("is-current", home);
+  if (home) navHomeBtn.setAttribute("aria-current", "page");
+  else navHomeBtn.removeAttribute("aria-current");
+  syncNavMenu(state.current, state.canBack, state.canForward);
+}
+
+let navMenuKey = "";
+
+/** The Go menu is app-wide: tell it what this window can do; it shows the frontmost window's. */
+function syncNavMenu(current: NavEntry | null, canBack: boolean, canForward: boolean): void {
+  const inFolder = current !== null && current.rootPath !== null;
+  const menuState = {
+    back: canBack,
+    forward: canForward,
+    home: current?.kind !== "home",
+    up: inFolder && (current.kind === "doc" || (current.kind === "folder" && current.dir.length > 0)),
+    closeFolder: inFolder,
+  };
+  const key = JSON.stringify(menuState);
+  if (key === navMenuKey) return;
+  navMenuKey = key;
+  void invoke("set_nav_menu_state", { state: menuState }).catch((e) => {
+    console.warn("Go menu not updated:", e);
+    // Send the same state again next time.
+    if (navMenuKey === key) navMenuKey = "";
+  });
+}
+
+// Data the home screen on display was built from: refreshing only when it
+// changed keeps a click that activates the window from landing on a node that
+// is being replaced.
+let homeDataKey = "";
+let shownHomeData: HomeData | null = null;
+let homeRefreshSeq = 0;
+
+async function refreshHome(): Promise<void> {
+  const current = nav.state().current;
+  if (current?.kind !== "home") return;
+  const token = viewToken;
+  const seq = ++homeRefreshSeq;
+  let data: HomeData;
+  try {
+    data = await buildHomeData(current.rootPath, false);
+  } catch (e) {
+    console.warn("Home not refreshed:", e);
+    return;
+  }
+  // Another view was committed meanwhile (closing the folder, opening one…),
+  // or a later refresh started: only the latest lands.
+  if (token !== viewToken || seq !== homeRefreshSeq) return;
+  const key = JSON.stringify(data);
+  if (key === homeDataKey) return;
+  rebuildHome(current, data);
+}
+
+/** Replace the home on display with one built from `data`, in place. */
+function rebuildHome(current: NavEntry, data: HomeData): void {
+  if (nav.state().current === null || activeScreen() !== "home") return;
+  const ctx: CommitContext = { target: current, positioning: { mode: "top" }, traversal: false, viewGen: 0 };
+  // build() records the data shown (homeDataKey, shownHomeData).
+  const built = build({ kind: "home", home: data }, ctx);
+  if (built.kind === "home") homeEl.replaceChildren(built.node);
+}
+
+/**
+ * Rebuild what is built in JS in the current language, without navigating
+ * (a load under way is left alone) and without reading anything again.
+ */
+function relabelScreen(): void {
+  const current = nav.state().current;
+  if (!current) return;
+  if (current.kind === "home") {
+    if (shownHomeData) rebuildHome(current, shownHomeData);
+    return;
+  }
+  if (!rootPath || !committedListing) return;
+  const root = rootPath;
+  const dir = [...currentPath];
+  const activeName = activeFile?.split("/").pop() ?? null;
+  fileList.replaceChildren(sidebarNode(root, dir, committedListing, activeName, null));
+  breadcrumb.replaceChildren(
+    buildBreadcrumb(rootName, dir, activeName, current.kind === "folder", (depth) => {
+      void nav.navigate({ kind: "folder", rootPath: root, dir: dir.slice(0, depth) });
+    })
+  );
+  if (current.kind === "folder") {
+    folderViewEl.replaceChildren(folderViewNode(root, dir, committedListing, null));
+    return;
+  }
+  for (const btn of markdownEl.querySelectorAll<HTMLButtonElement>(".copy-btn:not(.copied)")) {
+    btn.textContent = t("code.copy");
+  }
+  for (const btn of markdownEl.querySelectorAll<HTMLButtonElement>(".mermaid-fullscreen-btn")) {
+    btn.textContent = t("mermaid.fullscreen");
+  }
+  for (const msg of markdownEl.querySelectorAll<HTMLElement>(".mermaid-error-msg")) {
+    msg.textContent = t("mermaid.error");
+  }
+}
+
+async function resumeReading(): Promise<void> {
+  const lastRead = await loadLastRead();
+  if (!lastRead) return;
+  await nav.navigate(docEntry(lastRead.rootPath, lastRead.file), {
+    restoreScrollTop: lastRead.scrollTop,
+  });
+}
+
+async function openResumeFolder(): Promise<void> {
+  const lastRead = await loadLastRead();
+  if (lastRead) await openFolderPath(lastRead.rootPath);
+}
+
+// --- File loading ---
 
 function isRelativePath(src: string): boolean {
   return !(
@@ -1763,7 +3258,8 @@ function resolveImagePaths(container: HTMLElement, filePath: string): void {
   for (const img of container.querySelectorAll("img")) {
     const src = img.getAttribute("src");
     if (src && isRelativePath(src)) {
-      const absolutePath = `${dirPath}/${src}`;
+      // Decoded like links: `My%20Pic.png` names the file `My Pic.png`.
+      const absolutePath = `${dirPath}/${decodePathPart(src)}`;
       img.src = convertFileSrc(absolutePath);
     }
   }
@@ -1777,19 +3273,38 @@ const docCache = new Map<string, { mtime: number; text: string }>();
 let slowReadDismissed = false;
 let loadingTimer: ReturnType<typeof setTimeout> | null = null;
 
-function showLoadingSoon(): void {
+// Loads overlap when a newer one supersedes an older one: the indicator
+// follows the latest only, so a slow superseded read cannot keep it spinning.
+let loadToken = 0;
+
+function showLoadingSoon(): number {
+  loadToken += 1;
+  if (loadingTimer !== null) clearTimeout(loadingTimer);
   // Small delay so instant (cached) reads never flash a spinner.
   loadingTimer = setTimeout(() => {
     contentLoading.hidden = false;
+    // The card may be hidden (opening from home or a folder): show it up top too.
+    navSpinner.hidden = false;
+    srStatus.textContent = t("loading");
   }, 150);
+  return loadToken;
 }
 
-function hideLoading(): void {
+/** Stop the loading indicator whatever load it belonged to. */
+function endLoadingIndicator(): void {
+  loadToken += 1;
+  hideLoading(loadToken);
+}
+
+function hideLoading(token: number): void {
+  if (token !== loadToken) return;
   if (loadingTimer !== null) {
     clearTimeout(loadingTimer);
     loadingTimer = null;
   }
   contentLoading.hidden = true;
+  navSpinner.hidden = true;
+  srStatus.textContent = "";
 }
 
 slowReadDismiss.addEventListener("click", () => {
@@ -1797,8 +3312,11 @@ slowReadDismiss.addEventListener("click", () => {
   slowReadDismissed = true;
 });
 
+// `root` is captured by the navigation that asked for this read, so a slow read
+// started for one folder can never be resolved against another.
 async function readDocumentText(
-  fullPath: string
+  fullPath: string,
+  root: string
 ): Promise<{ text: string; slow: boolean }> {
   let mtime: number | null = null;
   try {
@@ -1815,7 +3333,7 @@ async function readDocumentText(
   // refuses anything outside it.
   const text = await invoke<string>("read_document", {
     path: fullPath,
-    root: rootPath,
+    root,
   });
   const slow = performance.now() - start >= SLOW_READ_MS;
   if (mtime !== null) {
@@ -1824,118 +3342,39 @@ async function readDocumentText(
   return { text, slow };
 }
 
-async function loadFile(filePath: string): Promise<void> {
-  try {
-    const fullPath = `${rootPath}/${filePath}`;
-    // IPC round-trip probe — only when the debug HUD is open, so normal use
-    // doesn't pay for an extra invoke on every document open.
-    const tPing0 = performance.now();
-    if (debugOverlay.isVisible()) {
-      await invoke("ping");
-    }
-    const tPing1 = performance.now();
-
-    loadError.hidden = true;
-    showLoadingSoon();
-    const tRead0 = performance.now();
-    let text: string;
-    let slowRead: boolean;
-    try {
-      ({ text, slow: slowRead } = await readDocumentText(fullPath));
-    } finally {
-      hideLoading();
-    }
-    const tRead1 = performance.now();
-
-    slowReadNotice.hidden = !(slowRead && !slowReadDismissed);
-
-    activeFile = filePath;
-    emptyState.style.display = "none";
-    markdownEl.style.display = "block";
-    contentEl.classList.remove("empty");
-
-    const t0 = performance.now();
-    markdownEl.innerHTML = parseMarkdown(text);
-    const t1 = performance.now();
-    resolveImagePaths(markdownEl, fullPath);
-    contentEl.scrollTop = 0;
-    const t2 = performance.now();
-
-    await renderMermaidDiagrams();
-    const t3 = performance.now();
-    addCopyButtons(markdownEl);
-    addImageLightbox(markdownEl, openImageOverlay);
-    const t4 = performance.now();
-
-    const fileDir = filePath.split("/").slice(0, -1);
-    if (fileDir.join("/") !== currentPath.join("/")) {
-      currentPath = fileDir;
-      await renderSidebar();
-    }
-
-    const currentDir = filePath.split("/").slice(0, -1);
-    interceptLinks(currentDir);
-    highlightSidebar();
-    const t5 = performance.now();
-    buildOutline();
-    const t6 = performance.now();
-
-    titlebarFilename.textContent = filePath.split("/").pop() ?? "";
-    syncWindowTitle();
-    setSearchEnabled(true);
-    searchController?.reset();
-
-    debugOverlay.recordOpen({
-      file: filePath.split("/").pop() ?? filePath,
-      total: t6 - tPing0,
-      phases: {
-        ping: tPing1 - tPing0,
-        read: tRead1 - tRead0,
-        parse: t1 - t0,
-        images: t2 - t1,
-        mermaid: t3 - t2,
-        dom: t4 - t3,
-        outline: t6 - t5,
-      },
-    });
-  } catch (e) {
-    console.error("Failed to load file:", filePath, e);
-    // Surface the failure. A console-only error made a whole class of unopenable
-    // files look like an unresponsive click: the sidebar listed them, selecting
-    // one simply did nothing.
-    hideLoading();
-    loadErrorText.textContent = t("loadError.message").replace(
-      "{file}",
-      filePath.split("/").pop() ?? filePath
-    );
-    loadError.hidden = false;
-  }
-}
-
 // --- Right outline ---
 
 function buildOutline(): void {
   if (scrollObserver) scrollObserver.disconnect();
 
   const headings = markdownEl.querySelectorAll("h2, h3");
-  outlineNav.innerHTML = "";
+  outlineNav.replaceChildren();
 
   if (headings.length === 0) {
     outlineEl.style.display = "none";
+    document.body.classList.remove("has-outline");
     return;
   }
 
-  outlineEl.style.display = "block";
-  const items: { el: HTMLAnchorElement; heading: Element }[] = [];
+  outlineEl.style.display = "";
+  document.body.classList.add("has-outline");
+  const items: { el: HTMLButtonElement; heading: Element }[] = [];
 
   for (const h of headings) {
-    const item = document.createElement("a");
+    const item = document.createElement("button");
+    item.type = "button";
     item.className = "outline-item";
     if (h.tagName === "H3") item.classList.add("depth-3");
     item.textContent = h.textContent;
     item.dataset.targetId = h.id;
     item.addEventListener("click", () => {
+      userScrolledSincePositioning = true;
+      markProgrammaticScroll(1500);
       h.scrollIntoView({ behavior: "smooth" });
+      if (document.body.classList.contains("outline-open")) {
+        setOutlineOpen(false);
+        outlineToggle.focus();
+      }
     });
     outlineNav.appendChild(item);
     items.push({ el: item, heading: h });
@@ -1947,7 +3386,10 @@ function buildOutline(): void {
         if (entry.isIntersecting) {
           const id = entry.target.id;
           for (const i of items) {
-            i.el.classList.toggle("active", i.heading.id === id);
+            const active = i.heading.id === id;
+            i.el.classList.toggle("active", active);
+            if (active) i.el.setAttribute("aria-current", "location");
+            else i.el.removeAttribute("aria-current");
           }
         }
       }
@@ -1966,8 +3408,23 @@ function buildOutline(): void {
 
 // --- Link interception ---
 
-function interceptLinks(currentDir: string[]): void {
-  for (const a of markdownEl.querySelectorAll("a")) {
+/** A heading of the open document; following the same link again scrolls again. */
+function goToAnchor(root: string, file: string, anchor: string): void {
+  if (nav.state().current?.anchor === anchor) {
+    // The reader chose to stay here: whatever was still loading is dropped.
+    nav.cancelPending();
+    endLoadingIndicator();
+    userScrolledSincePositioning = true;
+    markProgrammaticScroll(1500);
+    markdownEl.querySelector(`#${CSS.escape(anchor)}`)?.scrollIntoView({ behavior: "smooth" });
+    return;
+  }
+  void nav.navigate(docEntry(root, file, anchor));
+}
+
+function interceptLinks(container: HTMLElement, root: string, currentDir: string[]): void {
+  const file = () => activeFile;
+  for (const a of container.querySelectorAll("a")) {
     const href = a.getAttribute("href");
     if (!href) continue;
 
@@ -1985,9 +3442,9 @@ function interceptLinks(currentDir: string[]): void {
     if (linkType === "anchor") {
       a.addEventListener("click", (e) => {
         e.preventDefault();
-        const id = href.slice(1);
-        const target = markdownEl.querySelector(`#${CSS.escape(id)}`);
-        if (target) target.scrollIntoView({ behavior: "smooth" });
+        const anchor = decodeAnchor(href.slice(1));
+        const current = file();
+        if (anchor && current) goToAnchor(root, current, anchor);
       });
       continue;
     }
@@ -1997,29 +3454,9 @@ function interceptLinks(currentDir: string[]): void {
         e.preventDefault();
         const { filePart, anchor } = parseMarkdownHref(href);
         const resolved = resolvePath([...currentDir], filePart);
-        loadFile(resolved).then(() => {
-          if (anchor) {
-            const target = markdownEl.querySelector(`#${CSS.escape(anchor)}`);
-            if (target) target.scrollIntoView({ behavior: "smooth" });
-          }
-        });
+        if (anchor && resolved === file()) goToAnchor(root, resolved, anchor);
+        else void nav.navigate(docEntry(root, resolved, anchor));
       });
-    }
-  }
-}
-
-function highlightSidebar(): void {
-  for (const item of fileList.querySelectorAll(".file-item")) {
-    item.classList.remove("active");
-  }
-  if (!activeFile) return;
-  const activeName = activeFile.split("/").pop();
-  const activeDir = activeFile.split("/").slice(0, -1).join("/");
-  if (activeDir === currentPath.join("/")) {
-    for (const item of fileList.querySelectorAll(".file-item")) {
-      if (item.querySelector(".name")?.textContent === activeName) {
-        item.classList.add("active");
-      }
     }
   }
 }

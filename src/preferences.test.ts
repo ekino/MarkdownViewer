@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import {
+  resolveInitialLaunchPref,
   resolveDark,
   resolveInitialAppearance,
   resolveInitialFontSize,
@@ -27,6 +28,9 @@ import {
   PRESET_FONT_SIZE_PX,
   MIN_CUSTOM_FONT_SIZE,
   MAX_CUSTOM_FONT_SIZE,
+  changedSettings,
+  settingsToWrite,
+  settleWrite,
 } from "./preferences";
 
 describe("resolveDark", () => {
@@ -357,5 +361,62 @@ describe("resolveInitialFinderOpenPref", () => {
     expect(isFinderOpenPref("reuse")).toBe(true);
     expect(isFinderOpenPref("newwindow")).toBe(false);
     expect(isFinderOpenPref("")).toBe(false);
+  });
+});
+
+describe("resolveInitialLaunchPref", () => {
+  it("defaults to the home screen", () => {
+    expect(resolveInitialLaunchPref(undefined)).toBe("home");
+    expect(resolveInitialLaunchPref("garbage")).toBe("home");
+  });
+
+  it("keeps a saved choice", () => {
+    expect(resolveInitialLaunchPref("last-folder")).toBe("last-folder");
+  });
+});
+
+describe("changedSettings", () => {
+  it("keeps only what changed, plus what the reader just chose", () => {
+    const before = { themeId: "light", dayThemeId: "light", nightThemeId: "dark" };
+    const after = { themeId: "light", dayThemeId: "sepia", nightThemeId: "dark" };
+    expect(changedSettings(before, after)).toEqual({ dayThemeId: "sepia" });
+    // Choosing again what this window already shows is still written.
+    expect(changedSettings(before, before, { themeId: "light" })).toEqual({
+      themeId: "light",
+    });
+    expect(changedSettings(before, before)).toEqual({});
+  });
+});
+
+describe("theme settings retry", () => {
+  const current = { themeId: "light", dayThemeId: "sepia", followSystem: true };
+
+  it("writes the changes, the forced keys and the keys left unsaved", () => {
+    const before = { themeId: "light", dayThemeId: "light", followSystem: true };
+    expect(
+      settingsToWrite(current, before, { themeId: "light" }, new Set(["followSystem"]))
+    ).toEqual({ dayThemeId: "sepia", themeId: "light", followSystem: true });
+  });
+
+  it("does not write a setting that did not change", () => {
+    // Another window may have changed it: rewriting this window's value
+    // would undo that.
+    const before = { themeId: "light", followSystem: false };
+    const after = { themeId: "sepia", followSystem: false };
+    expect(settingsToWrite(after, before, {}, new Set())).toEqual({
+      themeId: "sepia",
+    });
+  });
+
+  it("ignores unsaved keys it has no value for", () => {
+    expect(settingsToWrite(current, current, {}, new Set(["gone"]))).toEqual({});
+  });
+
+  it("clears only the keys a successful write carried", () => {
+    const unsaved = new Set(["dayThemeId", "nightThemeId"]);
+    settleWrite(unsaved, { dayThemeId: "x" }, true);
+    expect([...unsaved]).toEqual(["nightThemeId"]);
+    settleWrite(unsaved, { themeId: "y" }, false);
+    expect([...unsaved].sort()).toEqual(["nightThemeId", "themeId"]);
   });
 });

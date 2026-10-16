@@ -6,9 +6,19 @@ import {
   filterAndSortEntries,
   classifyLink,
   parseMarkdownHref,
+  decodePathPart,
+  parentLabel,
+  tildePath,
   findReadme,
   mergeRecent,
   resolveInitialView,
+  decodeAnchor,
+  isMarkdownName,
+  listingStatusFromError,
+  shouldWriteLastRead,
+  summarizeListing,
+  filterAndSortEntries as filterEntries,
+  type LastRead,
   windowTitle,
 } from "./utils";
 import type { RecentEntry } from "./utils";
@@ -76,8 +86,29 @@ describe("extractRootName", () => {
     expect(extractRootName("myFolder")).toBe("myFolder");
   });
 
-  it("handles trailing slash", () => {
-    expect(extractRootName("/a/b/c/")).toBe("root");
+  it("ignores a trailing slash", () => {
+    expect(extractRootName("/a/b/c/")).toBe("c");
+  });
+
+  it("names the volume root /", () => {
+    expect(extractRootName("/")).toBe("/");
+  });
+});
+
+describe("tildePath and parentLabel", () => {
+  it("writes the home folder ~", () => {
+    expect(tildePath("/Users/me/dev/mdv")).toBe("~/dev/mdv");
+    expect(tildePath("/Volumes/Docs")).toBe("/Volumes/Docs");
+  });
+
+  it("gives where a path sits, not the path itself", () => {
+    expect(parentLabel("/Users/me/dev/mdv")).toBe("~/dev");
+    expect(parentLabel("/Users/me/dev/mdv/")).toBe("~/dev");
+    expect(parentLabel("/Volumes/Docs")).toBe("/Volumes");
+  });
+
+  it("gives nothing for the volume root", () => {
+    expect(parentLabel("/")).toBe("");
   });
 });
 
@@ -180,6 +211,22 @@ describe("classifyLink", () => {
 });
 
 describe("parseMarkdownHref", () => {
+  it("decodes the file part", () => {
+    expect(parseMarkdownHref("My%20Guide.md#Mise%20en%20route")).toEqual({
+      filePart: "My Guide.md",
+      anchor: "Mise en route",
+    });
+  });
+
+  it("keeps a file part with a malformed escape as written", () => {
+    expect(parseMarkdownHref("100%.md").filePart).toBe("100%.md");
+  });
+
+  it("decodes image paths the same way", () => {
+    expect(decodePathPart("img/My%20Pic.png")).toBe("img/My Pic.png");
+    expect(decodePathPart("100%.png")).toBe("100%.png");
+  });
+
   it("parses a simple markdown link", () => {
     expect(parseMarkdownHref("guide.md")).toEqual({
       filePart: "guide.md",
@@ -300,11 +347,19 @@ describe("resolveInitialView", () => {
     });
   });
 
-  it("restores the saved folder when nothing is pending", () => {
-    expect(resolveInitialView(null, "/old")).toEqual({
+  it("restores the saved folder when the preference asks for it", () => {
+    expect(resolveInitialView(null, "/old", true)).toEqual({
       kind: "folder",
       path: "/old",
     });
+  });
+
+  it("opens on the home screen by default, even with a saved folder", () => {
+    expect(resolveInitialView(null, "/old")).toEqual({ kind: "welcome" });
+  });
+
+  it("keeps a pending empty window on the home screen whatever the preference", () => {
+    expect(resolveInitialView({ kind: "empty" }, "/old", true)).toEqual({ kind: "welcome" });
   });
 
   it("shows the welcome screen with no pending open and no saved folder", () => {
@@ -327,5 +382,86 @@ describe("windowTitle", () => {
 
   it("falls back to the app name on the welcome screen", () => {
     expect(windowTitle(null, "")).toBe("Markdown Viewer");
+  });
+});
+
+describe("Markdown extensions", () => {
+  it("accepts .md, .markdown and .mdx whatever the case", () => {
+    expect(isMarkdownName("a.md")).toBe(true);
+    expect(isMarkdownName("A.MARKDOWN")).toBe(true);
+    expect(isMarkdownName("page.Mdx")).toBe(true);
+    expect(isMarkdownName(".md")).toBe(false);
+    expect(isMarkdownName("notes.txt")).toBe(false);
+  });
+
+  it("lists every Markdown flavour in the sidebar", () => {
+    const names = filterEntries([
+      { name: "b.markdown", isDirectory: false },
+      { name: "a.MDX", isDirectory: false },
+      { name: "c.txt", isDirectory: false },
+    ]).map((e) => e.name);
+    expect(names).toEqual(["a.MDX", "b.markdown"]);
+  });
+
+  it("follows links to every Markdown flavour", () => {
+    expect(classifyLink("guide.markdown#x")).toBe("markdown");
+    expect(classifyLink("Guide.MDX")).toBe("markdown");
+  });
+});
+
+describe("decodeAnchor", () => {
+  it("treats an empty fragment as no anchor", () => {
+    expect(decodeAnchor("")).toBeUndefined();
+    expect(decodeAnchor(undefined)).toBeUndefined();
+    expect(parseMarkdownHref("guide.md#").anchor).toBeUndefined();
+  });
+
+  it("decodes encoded anchors and keeps undecodable ones as written", () => {
+    expect(decodeAnchor("caf%C3%A9")).toBe("café");
+    expect(decodeAnchor("50%")).toBe("50%");
+  });
+});
+
+describe("summarizeListing", () => {
+  it("tells an empty folder from one without Markdown", () => {
+    expect(summarizeListing([])).toEqual({ status: "ok", rawCount: 0, entries: [] });
+    const noMd = summarizeListing([
+      { name: "photo.png", isDirectory: false },
+      { name: ".DS_Store", isDirectory: false },
+    ]);
+    expect(noMd.rawCount).toBe(1);
+    expect(noMd.entries).toEqual([]);
+  });
+
+  it("maps directory read errors to a status", () => {
+    expect(listingStatusFromError(new Error("No such file or directory (os error 2)"))).toBe("missing");
+    expect(listingStatusFromError("Permission denied (os error 13)")).toBe("denied");
+    expect(listingStatusFromError("Operation not permitted (os error 1)")).toBe("denied");
+    expect(listingStatusFromError("disk on fire")).toBe("error");
+    expect(listingStatusFromError("Not a directory (os error 20)")).toBe("error");
+  });
+});
+
+describe("shouldWriteLastRead", () => {
+  const read = (file: string, at: number): LastRead => ({
+    rootPath: "/root",
+    file,
+    title: file,
+    scrollTop: 0,
+    at,
+  });
+
+  it("writes when nothing valid is stored", () => {
+    expect(shouldWriteLastRead(undefined, read("a.md", 1))).toBe(true);
+    expect(shouldWriteLastRead({ junk: true }, read("a.md", 1))).toBe(true);
+  });
+
+  it("never lets an older activity overwrite a newer one", () => {
+    expect(shouldWriteLastRead(read("b.md", 20), read("a.md", 10))).toBe(false);
+    expect(shouldWriteLastRead(read("b.md", 10), read("a.md", 20))).toBe(true);
+  });
+
+  it("lets the same document update its position at the same activity time", () => {
+    expect(shouldWriteLastRead(read("a.md", 10), { ...read("a.md", 10), scrollTop: 900 })).toBe(true);
   });
 });
