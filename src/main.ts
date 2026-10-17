@@ -130,6 +130,9 @@ import { appMark, icon } from "./icons";
 const themeToggle = document.getElementById(
   "theme-toggle"
 ) as HTMLButtonElement;
+const sidebarTheme = document.getElementById(
+  "sidebar-theme"
+) as HTMLButtonElement;
 
 // The theme shown when not following macOS, and the light/dark pair used when
 // following it. Choosing a theme also fills the slot matching its appearance,
@@ -289,6 +292,7 @@ function applyActiveTheme(): void {
   applyThemeToDOM(themeCatalog, document.documentElement, id);
   const dark = themeCatalog[id]?.isDark ?? false;
   themeToggle.innerHTML = icon(dark ? "sun" : "moon");
+  sidebarTheme.innerHTML = themeToggle.innerHTML;
   mermaid.initialize({
     startOnLoad: false,
     theme: dark ? "dark" : "default",
@@ -486,6 +490,7 @@ const pdfBtn = document.getElementById("pdf-btn") as HTMLButtonElement;
 pdfBtn.addEventListener("click", exportPdf);
 
 themeToggle.addEventListener("click", toggleTheme);
+sidebarTheme.addEventListener("click", toggleTheme);
 
 let mermaidCounter = 0;
 
@@ -2312,6 +2317,7 @@ function initChrome(): void {
     foldSearch();
   });
   prefsBtn.addEventListener("click", openPrefs);
+  document.getElementById("sidebar-prefs")!.addEventListener("click", openPrefs);
   folderSwitcher.addEventListener("click", (e) => {
     e.stopPropagation();
     if (folderMenu.hidden && !folderMenuOpening) void openFolderMenu();
