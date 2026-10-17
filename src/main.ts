@@ -983,15 +983,15 @@ function foldSearch(fromKeyboard = false): void {
   if (fromKeyboard && searchToggle.getClientRects().length > 0) searchToggle.focus();
 }
 
-// Same breakpoint as the CSS that folds the search field.
-const compactSearchMQ = window.matchMedia("(max-width: 1000px)");
-
 function focusSearch(): void {
   if (searchInput.disabled) {
     return;
   }
-  // In a narrow window the field is folded behind a button: unfold it first.
-  if (compactSearchMQ.matches) document.body.classList.add("search-open");
+  // In a narrow window the field is folded behind the search button (shown
+  // in its place, at a width that depends on the sidebar): unfold it first.
+  if (searchToggle.getClientRects().length > 0) {
+    document.body.classList.add("search-open");
+  }
   searchInput.focus();
   searchInput.select();
 }

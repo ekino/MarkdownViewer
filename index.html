@@ -765,8 +765,13 @@
       }
 
       body.has-folder:not([data-screen="home"]):not(.print-mode) #search-input {
-        min-width: 60px;
+        min-width: 30px;
         flex: 0 1 auto;
+      }
+
+      /* The field gives way, never the match count. */
+      body.has-folder:not([data-screen="home"]):not(.print-mode) #search-counter {
+        flex-shrink: 0;
       }
     }
 
