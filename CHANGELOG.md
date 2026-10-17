@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.12.0](https://github.com/ekino/MarkdownViewer/releases/tag/v0.12.0) - 2026-10-16
+
+### Added
+
+- Home screen at launch: pick up the last document where you left it, reopen a recent folder or file, or drop one on the window. Preferences › General can restore the last folder at launch instead (FR + EN)
+- Per-window navigation history, with a native Go menu: Back ⌘[, Forward ⌘], Home ⇧⌘H (the folder stays open), Enclosing Folder ⌘↑ and Close Folder ⇧⌘W. Items are disabled when the frontmost window cannot take that step
+- Folder view: an overview of the folder's documents and subfolders, with a clickable breadcrumb
+- `.markdown` and `.mdx` files are recognised alongside `.md`, in any letter case
+- Speakino Light and Speakino Dark document themes, bringing the built-in total to ten
+- With *Follow macOS appearance* on, one theme for light mode and one for dark mode; the title bar toggle switches between the two. Existing settings are migrated
+
+### Changed
+
+- Speakino-style window chrome: a 52px title bar that clears the traffic lights (and reflows in full screen), keycap buttons, light and dark palettes, and a new app icon
+- Preferences redesigned as a settings sheet with three tabs (General, Reading, Themes), settings written as sentences with inline selects, and theme tiles per mode (FR + EN)
+- Settings are saved through one write queue; theme choices write only the keys that changed and retry keys whose last write failed
+- Closing a folder forgets it, so it is not reopened at the next launch
+
+### Fixed
+
+- Links and images whose file name is percent-encoded (`My%20Guide.md`) now open the right file
+
 ## [0.11.1](https://github.com/ekino/MarkdownViewer/releases/tag/v0.11.1) - 2026-08-13
 
 ### Added
