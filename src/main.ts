@@ -130,6 +130,9 @@ import { appMark, icon } from "./icons";
 const themeToggle = document.getElementById(
   "theme-toggle"
 ) as HTMLButtonElement;
+const sidebarTheme = document.getElementById(
+  "sidebar-theme"
+) as HTMLButtonElement;
 
 // The theme shown when not following macOS, and the light/dark pair used when
 // following it. Choosing a theme also fills the slot matching its appearance,
@@ -289,6 +292,7 @@ function applyActiveTheme(): void {
   applyThemeToDOM(themeCatalog, document.documentElement, id);
   const dark = themeCatalog[id]?.isDark ?? false;
   themeToggle.innerHTML = icon(dark ? "sun" : "moon");
+  sidebarTheme.innerHTML = themeToggle.innerHTML;
   mermaid.initialize({
     startOnLoad: false,
     theme: dark ? "dark" : "default",
@@ -486,6 +490,7 @@ const pdfBtn = document.getElementById("pdf-btn") as HTMLButtonElement;
 pdfBtn.addEventListener("click", exportPdf);
 
 themeToggle.addEventListener("click", toggleTheme);
+sidebarTheme.addEventListener("click", toggleTheme);
 
 let mermaidCounter = 0;
 
@@ -978,15 +983,15 @@ function foldSearch(fromKeyboard = false): void {
   if (fromKeyboard && searchToggle.getClientRects().length > 0) searchToggle.focus();
 }
 
-// Same breakpoint as the CSS that folds the search field.
-const compactSearchMQ = window.matchMedia("(max-width: 1000px)");
-
 function focusSearch(): void {
   if (searchInput.disabled) {
     return;
   }
-  // In a narrow window the field is folded behind a button: unfold it first.
-  if (compactSearchMQ.matches) document.body.classList.add("search-open");
+  // In a narrow window the field is folded behind the search button (shown
+  // in its place, at a width that depends on the sidebar): unfold it first.
+  if (searchToggle.getClientRects().length > 0) {
+    document.body.classList.add("search-open");
+  }
   searchInput.focus();
   searchInput.select();
 }
@@ -2312,6 +2317,7 @@ function initChrome(): void {
     foldSearch();
   });
   prefsBtn.addEventListener("click", openPrefs);
+  document.getElementById("sidebar-prefs")!.addEventListener("click", openPrefs);
   folderSwitcher.addEventListener("click", (e) => {
     e.stopPropagation();
     if (folderMenu.hidden && !folderMenuOpening) void openFolderMenu();
