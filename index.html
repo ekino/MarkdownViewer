@@ -729,9 +729,10 @@
     }
 
     /* Docked sidebar: it runs the full height of the window, traffic lights
-       included, and the title bar sits over the content only. */
-    @media (min-width: 861px) {
-      body.has-folder:not([data-screen="home"]) #titlebar {
+       included, and the title bar sits over the content only. Screen only:
+       print and PDF export lay the document out on its own. */
+    @media screen and (min-width: 861px) {
+      body.has-folder:not([data-screen="home"]):not(.print-mode) #titlebar {
         position: absolute;
         top: 0;
         left: var(--sidebar-width);
@@ -740,19 +741,56 @@
         padding-left: 16px;
       }
 
-      body.has-folder:not([data-screen="home"]) #main {
+      body.has-folder:not([data-screen="home"]):not(.print-mode) #main {
         padding-top: 52px;
       }
 
-      body.has-folder:not([data-screen="home"]) #sidebar {
+      body.has-folder:not([data-screen="home"]):not(.print-mode) #sidebar {
         margin-top: -52px;
         padding-top: 52px;
       }
 
       /* Preferences and the theme switch move to the sidebar's foot. */
-      body.has-folder:not([data-screen="home"]) #theme-toggle,
-      body.has-folder:not([data-screen="home"]) #prefs-btn {
+      body.has-folder:not([data-screen="home"]):not(.print-mode) #theme-toggle,
+      body.has-folder:not([data-screen="home"]):not(.print-mode) #prefs-btn {
         display: none;
+      }
+
+      /* The title bar loses the sidebar's width: the search box shrinks
+         rather than push the actions out of the window. */
+      body.has-folder:not([data-screen="home"]):not(.print-mode) #titlebar-actions,
+      body.has-folder:not([data-screen="home"]):not(.print-mode) #search-box {
+        min-width: 0;
+        flex-shrink: 1;
+      }
+
+      body.has-folder:not([data-screen="home"]):not(.print-mode) #search-input {
+        min-width: 60px;
+        flex: 0 1 auto;
+      }
+    }
+
+    /* The title bar is the sidebar's width narrower than the window: search
+       folds into a button as it does below 1000px without a sidebar. */
+    @media screen and (min-width: 861px) and (max-width: 1248px) {
+      body.has-folder:not([data-screen="home"]):not(.print-mode)[data-screen="doc"] #search-toggle {
+        display: inline-flex;
+      }
+
+      body.has-folder:not([data-screen="home"]):not(.print-mode)[data-screen="doc"] #search-box {
+        display: none;
+      }
+
+      body.has-folder:not([data-screen="home"]):not(.print-mode)[data-screen="doc"].search-open #search-box {
+        display: flex;
+      }
+
+      body.has-folder:not([data-screen="home"]):not(.print-mode).search-open #search-toggle {
+        display: none;
+      }
+
+      body.has-folder:not([data-screen="home"]):not(.print-mode) #search-input {
+        width: 150px;
       }
     }
 
