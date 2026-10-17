@@ -769,6 +769,12 @@
         flex: 0 1 auto;
       }
 
+      /* The path gives way first, whatever its length: the actions shrink
+         only once it is gone. */
+      body.has-folder:not([data-screen="home"]):not(.print-mode) #breadcrumb {
+        flex-shrink: 1000;
+      }
+
       /* The field gives way, never the match count. */
       body.has-folder:not([data-screen="home"]):not(.print-mode) #search-counter {
         flex-shrink: 0;
