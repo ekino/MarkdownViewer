@@ -327,6 +327,32 @@ describe("trapFocus — returnFocus option", () => {
     expect(document.activeElement).toBe(shown);
   });
 
+  it("moves on when focus does not land on a fallback", () => {
+    // Stands in for an inert fallback, which jsdom does not model.
+    const opener = makeButton("opener");
+    const refusing = makeButton("refusing");
+    refusing.focus = () => {};
+    const next = makeButton("next");
+    document.body.append(opener, refusing, next);
+    const trap = openFrom(opener, refusing, next);
+
+    opener.remove();
+    trap.release();
+    expect(document.activeElement).toBe(next);
+  });
+
+  it("keeps the fallbacks' order when several can take focus", () => {
+    const opener = makeButton("opener");
+    const first = makeButton("first");
+    const second = makeButton("second");
+    document.body.append(opener, second, first);
+    const trap = openFrom(opener, first, second);
+
+    opener.remove();
+    trap.release();
+    expect(document.activeElement).toBe(first);
+  });
+
   it("skips a fallback that is hidden too", () => {
     const opener = makeButton("opener");
     const fallback = makeButton("fallback");
