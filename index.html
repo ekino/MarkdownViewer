@@ -2247,7 +2247,8 @@
           visibility 0.18s;
       }
 
-      body.sidebar-open #sidebar {
+      /* As specific as the closed state above, or it never applies. */
+      body.has-folder.sidebar-open:not([data-screen="home"]) #sidebar {
         transform: none;
         visibility: visible;
       }
