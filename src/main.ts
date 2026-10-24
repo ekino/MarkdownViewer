@@ -1754,8 +1754,7 @@ function openPrefs(): void {
     initialFocus: () => getActiveTabButton(),
     // Opened from one Preferences button, closed after a resize swapped it for
     // the other: focus goes to whichever is showing.
-    returnFocus: () =>
-      prefsBtn.getClientRects().length > 0 ? prefsBtn : sidebarPrefs,
+    returnFocus: [prefsBtn, sidebarPrefs],
   });
 }
 

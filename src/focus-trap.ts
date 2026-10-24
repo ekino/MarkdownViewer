@@ -76,10 +76,11 @@ export interface TrapFocusOptions {
   initialFocus?: HTMLElement | (() => HTMLElement | null | undefined) | null;
   /**
    * Where focus goes on release when the element focused before the trap can
-   * no longer take it (removed, or hidden meanwhile — e.g. a button a resize
-   * swapped for another). Not used when nothing had focus before the trap.
+   * no longer take it (removed, hidden, disabled or inert meanwhile — e.g. a
+   * button a resize swapped for another): the first of these that can.
+   * Not used when nothing had focus before the trap.
    */
-  returnFocus?: () => HTMLElement | null | undefined;
+  returnFocus?: HTMLElement[];
 }
 
 /**
@@ -180,10 +181,13 @@ export function trapFocus(
         isRendered(previouslyFocused)
       ) {
         previouslyFocused.focus();
-        return;
+        if (document.activeElement === previouslyFocused) return;
       }
-      const fallback = options.returnFocus?.();
-      if (fallback && isVisiblyFocusable(fallback)) fallback.focus();
+      for (const el of options.returnFocus ?? []) {
+        if (!document.body.contains(el) || !isVisiblyFocusable(el)) continue;
+        el.focus();
+        if (document.activeElement === el) return;
+      }
     },
   };
 }

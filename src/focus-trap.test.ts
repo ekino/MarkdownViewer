@@ -225,12 +225,12 @@ describe("trapFocus — returnFocus option", () => {
     document.body.innerHTML = "";
   });
 
-  function openFrom(opener: HTMLElement, fallback: HTMLElement) {
+  function openFrom(opener: HTMLElement, ...returnFocus: HTMLElement[]) {
     opener.focus();
     const root = document.createElement("div");
     root.appendChild(makeButton("inside"));
     document.body.appendChild(root);
-    return trapFocus(root, { returnFocus: () => fallback });
+    return trapFocus(root, { returnFocus });
   }
 
   it("focuses the fallback when the opener was hidden meanwhile", () => {
@@ -283,10 +283,48 @@ describe("trapFocus — returnFocus option", () => {
     const root = document.createElement("div");
     root.appendChild(makeButton("inside"));
     document.body.appendChild(root);
-    const trap = trapFocus(root, { returnFocus: () => fallback });
+    const trap = trapFocus(root, { returnFocus: [fallback] });
 
     trap.release();
     expect(document.activeElement).not.toBe(fallback);
+  });
+
+  it("focuses the fallback when the opener was disabled", () => {
+    const opener = makeButton("opener");
+    const fallback = makeButton("fallback");
+    document.body.append(opener, fallback);
+    const trap = openFrom(opener, fallback);
+
+    opener.disabled = true;
+    trap.release();
+    expect(document.activeElement).toBe(fallback);
+  });
+
+  it("swaps the two Preferences buttons as a resize does", () => {
+    // Below 860px the title bar's button shows; above, the sidebar's.
+    const titlebarBtn = makeButton("titlebar");
+    const sidebarBtn = makeButton("sidebar");
+    sidebarBtn.style.display = "none";
+    document.body.append(titlebarBtn, sidebarBtn);
+    const trap = openFrom(titlebarBtn, titlebarBtn, sidebarBtn);
+
+    titlebarBtn.style.display = "none";
+    sidebarBtn.style.display = "";
+    trap.release();
+    expect(document.activeElement).toBe(sidebarBtn);
+  });
+
+  it("takes the first fallback that can hold focus", () => {
+    const opener = makeButton("opener");
+    const hidden = makeButton("hidden");
+    const shown = makeButton("shown");
+    hidden.style.display = "none";
+    document.body.append(opener, hidden, shown);
+    const trap = openFrom(opener, hidden, shown);
+
+    opener.remove();
+    trap.release();
+    expect(document.activeElement).toBe(shown);
   });
 
   it("skips a fallback that is hidden too", () => {
