@@ -696,6 +696,7 @@ const searchBoxEl = document.getElementById("search-box") as HTMLDivElement;
 const navSpinner = document.getElementById("nav-spinner") as HTMLSpanElement;
 const srStatus = document.getElementById("sr-status") as HTMLSpanElement;
 const prefsBtn = document.getElementById("prefs-btn") as HTMLButtonElement;
+const sidebarPrefs = document.getElementById("sidebar-prefs") as HTMLButtonElement;
 const contentEl = document.getElementById("content") as HTMLDivElement;
 const contentLoading = document.getElementById(
   "content-loading"
@@ -1751,6 +1752,10 @@ function openPrefs(): void {
   // is the default first-focusable. Tabs are a more meaningful entry point.
   prefsFocusTrap = trapFocus(prefsBackdrop, {
     initialFocus: () => getActiveTabButton(),
+    // Opened from one Preferences button, closed after a resize swapped it for
+    // the other: focus goes to whichever is showing.
+    returnFocus: () =>
+      prefsBtn.getClientRects().length > 0 ? prefsBtn : sidebarPrefs,
   });
 }
 
@@ -2317,7 +2322,7 @@ function initChrome(): void {
     foldSearch();
   });
   prefsBtn.addEventListener("click", openPrefs);
-  document.getElementById("sidebar-prefs")!.addEventListener("click", openPrefs);
+  sidebarPrefs.addEventListener("click", openPrefs);
   folderSwitcher.addEventListener("click", (e) => {
     e.stopPropagation();
     if (folderMenu.hidden && !folderMenuOpening) void openFolderMenu();

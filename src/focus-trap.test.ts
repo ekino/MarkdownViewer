@@ -220,6 +220,88 @@ describe("trapFocus — release", () => {
   });
 });
 
+describe("trapFocus — returnFocus option", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  function openFrom(opener: HTMLElement, fallback: HTMLElement) {
+    opener.focus();
+    const root = document.createElement("div");
+    root.appendChild(makeButton("inside"));
+    document.body.appendChild(root);
+    return trapFocus(root, { returnFocus: () => fallback });
+  }
+
+  it("focuses the fallback when the opener was hidden meanwhile", () => {
+    const opener = makeButton("opener");
+    const fallback = makeButton("fallback");
+    document.body.append(opener, fallback);
+    const trap = openFrom(opener, fallback);
+
+    opener.style.display = "none";
+    trap.release();
+    expect(document.activeElement).toBe(fallback);
+  });
+
+  it("focuses the fallback when the opener was removed", () => {
+    const opener = makeButton("opener");
+    const fallback = makeButton("fallback");
+    document.body.append(opener, fallback);
+    const trap = openFrom(opener, fallback);
+
+    opener.remove();
+    trap.release();
+    expect(document.activeElement).toBe(fallback);
+  });
+
+  it("still prefers the opener when it is showing", () => {
+    const opener = makeButton("opener");
+    const fallback = makeButton("fallback");
+    document.body.append(opener, fallback);
+    const trap = openFrom(opener, fallback);
+
+    trap.release();
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it("restores an opener that is rendered but out of the tab order", () => {
+    const opener = document.createElement("div");
+    opener.tabIndex = -1;
+    const fallback = makeButton("fallback");
+    document.body.append(opener, fallback);
+    const trap = openFrom(opener, fallback);
+
+    trap.release();
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it("leaves focus alone when nothing had it before the trap", () => {
+    const fallback = makeButton("fallback");
+    document.body.appendChild(fallback);
+    (document.activeElement as HTMLElement | null)?.blur();
+    const root = document.createElement("div");
+    root.appendChild(makeButton("inside"));
+    document.body.appendChild(root);
+    const trap = trapFocus(root, { returnFocus: () => fallback });
+
+    trap.release();
+    expect(document.activeElement).not.toBe(fallback);
+  });
+
+  it("skips a fallback that is hidden too", () => {
+    const opener = makeButton("opener");
+    const fallback = makeButton("fallback");
+    document.body.append(opener, fallback);
+    const trap = openFrom(opener, fallback);
+
+    opener.style.display = "none";
+    fallback.style.visibility = "hidden";
+    trap.release();
+    expect(document.activeElement).not.toBe(fallback);
+  });
+});
+
 describe("trapFocus — initialFocus option", () => {
   let root: HTMLElement;
 

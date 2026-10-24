@@ -737,8 +737,13 @@
         top: 0;
         left: var(--sidebar-width);
         right: 0;
-        z-index: 40;
+        /* Above the folded outline (40), which opens under the bar: the
+           search options menu stacks within the bar and must cover it. */
+        z-index: 41;
         padding-left: 16px;
+        /* Search folds on the bar's own width (see below), whatever the
+           sidebar's. */
+        container: titlebar / inline-size;
       }
 
       body.has-folder:not([data-screen="home"]):not(.print-mode) #main {
@@ -782,8 +787,10 @@
     }
 
     /* The title bar is the sidebar's width narrower than the window: search
-       folds into a button as it does below 1000px without a sidebar. */
-    @media screen and (min-width: 861px) and (max-width: 1248px) {
+       folds into a button as it does in a window below 1000px without a
+       sidebar. 971px = 1000px less the bar's 16px + 13px side padding, as a
+       container query measures the content box. */
+    @container titlebar (max-width: 971px) {
       body.has-folder:not([data-screen="home"]):not(.print-mode)[data-screen="doc"] #search-toggle {
         display: inline-flex;
       }

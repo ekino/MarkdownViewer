@@ -32,6 +32,13 @@ function isVisiblyFocusable(el: HTMLElement): boolean {
   if (el.hasAttribute("disabled")) return false;
   if (el.getAttribute("aria-hidden") === "true") return false;
   if (el.tabIndex < 0) return false;
+  return isRendered(el);
+}
+
+/**
+ * False when `el` or an ancestor is display:none or visibility:hidden.
+ */
+function isRendered(el: HTMLElement): boolean {
   // Walk up the tree and reject the element if any ancestor (or itself) is
   // display:none or visibility:hidden. This is robust across jsdom and real
   // browsers; offsetParent is unreliable in jsdom for visible elements.
@@ -67,6 +74,12 @@ export interface TrapFocusOptions {
    * choice for tabbed modals where the active tab is the natural target.
    */
   initialFocus?: HTMLElement | (() => HTMLElement | null | undefined) | null;
+  /**
+   * Where focus goes on release when the element focused before the trap can
+   * no longer take it (removed, or hidden meanwhile — e.g. a button a resize
+   * swapped for another). Not used when nothing had focus before the trap.
+   */
+  returnFocus?: () => HTMLElement | null | undefined;
 }
 
 /**
@@ -161,9 +174,16 @@ export function trapFocus(
     },
     release() {
       container.removeEventListener("keydown", onKeyDown);
-      if (previouslyFocused && document.body.contains(previouslyFocused)) {
+      if (!previouslyFocused || previouslyFocused === document.body) return;
+      if (
+        document.body.contains(previouslyFocused) &&
+        isRendered(previouslyFocused)
+      ) {
         previouslyFocused.focus();
+        return;
       }
+      const fallback = options.returnFocus?.();
+      if (fallback && isVisiblyFocusable(fallback)) fallback.focus();
     },
   };
 }
