@@ -2224,6 +2224,12 @@
         display: inline-flex;
       }
 
+      /* The title bar keeps Preferences and the theme switch: no copy in the
+         overlaid sidebar's foot. */
+      #sidebar-footer {
+        display: none;
+      }
+
       body.has-folder:not([data-screen="home"]) #sidebar {
         position: fixed;
         top: 0;

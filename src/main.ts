@@ -15,7 +15,7 @@ import { load } from "@tauri-apps/plugin-store";
 import { confirmDialog } from "./confirm-dialog";
 import { createDebugOverlay } from "./debug-overlay";
 import { addCopyButtons, addImageLightbox } from "./dom";
-import { trapFocus, type FocusTrap } from "./focus-trap";
+import { holdsFocus, trapFocus, type FocusTrap } from "./focus-trap";
 import {
   LOCALE_KEY,
   applyTranslations,
@@ -2097,6 +2097,8 @@ let sidebarOpener: HTMLElement | null = null;
 function setSidebarOpen(open: boolean): void {
   const wasOpen = document.body.classList.contains("sidebar-open");
   if (open === wasOpen) return;
+  // Before the page goes inert, which drops focus from the opener.
+  if (open) sidebarOpener = document.activeElement as HTMLElement | null;
   document.body.classList.toggle("sidebar-open", open);
   sidebarToggle.setAttribute("aria-expanded", String(open));
   sidebarScrim.hidden = !open;
@@ -2107,12 +2109,13 @@ function setSidebarOpen(open: boolean): void {
   if (open) {
     sidebarEl.setAttribute("role", "dialog");
     sidebarEl.setAttribute("aria-modal", "true");
-    sidebarOpener = document.activeElement as HTMLElement | null;
     (sidebarEl.querySelector<HTMLElement>(".file-item.active, .file-item") ?? sidebarClose).focus();
   } else {
     sidebarEl.removeAttribute("role");
     sidebarEl.removeAttribute("aria-modal");
-    focusVisible(sidebarOpener);
+    // Hand focus back unless something outside the panel holds it: a dialog
+    // opened from it (Preferences) keeps it when a resize closes the panel.
+    if (holdsFocus(sidebarEl)) focusVisible(sidebarOpener);
     sidebarOpener = null;
   }
 }

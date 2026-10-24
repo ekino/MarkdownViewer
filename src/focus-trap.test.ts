@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, it, expect } from "vitest";
-import { focusableWithin, trapFocus } from "./focus-trap";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
+import { focusableWithin, holdsFocus, trapFocus } from "./focus-trap";
 
 function makeButton(label: string, opts: Partial<HTMLButtonElement> = {}): HTMLButtonElement {
   const b = document.createElement("button");
@@ -353,6 +353,19 @@ describe("trapFocus — returnFocus option", () => {
     expect(document.activeElement).toBe(first);
   });
 
+  it("skips a fallback that is out of the tab order", () => {
+    const opener = makeButton("opener");
+    const untabbable = makeButton("untabbable");
+    untabbable.tabIndex = -1;
+    const next = makeButton("next");
+    document.body.append(opener, untabbable, next);
+    const trap = openFrom(opener, untabbable, next);
+
+    opener.remove();
+    trap.release();
+    expect(document.activeElement).toBe(next);
+  });
+
   it("skips a fallback that is hidden too", () => {
     const opener = makeButton("opener");
     const fallback = makeButton("fallback");
@@ -363,6 +376,45 @@ describe("trapFocus — returnFocus option", () => {
     fallback.style.visibility = "hidden";
     trap.release();
     expect(document.activeElement).not.toBe(fallback);
+  });
+});
+
+describe("holdsFocus", () => {
+  let panel: HTMLElement;
+
+  beforeEach(() => {
+    document.body.innerHTML = "";
+    panel = document.createElement("div");
+    document.body.appendChild(panel);
+  });
+
+  it("is true when focus is inside the container", () => {
+    const inside = makeButton("inside");
+    panel.appendChild(inside);
+    inside.focus();
+    expect(holdsFocus(panel)).toBe(true);
+  });
+
+  it("is true when nothing in particular has focus", () => {
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.activeElement).toBe(document.body);
+    expect(holdsFocus(panel)).toBe(true);
+  });
+
+  it("is true when no element reports focus at all", () => {
+    const spy = vi.spyOn(document, "activeElement", "get").mockReturnValue(null);
+    try {
+      expect(holdsFocus(panel)).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("is false when something outside the container holds focus", () => {
+    const dialogButton = makeButton("dialog");
+    document.body.appendChild(dialogButton);
+    dialogButton.focus();
+    expect(holdsFocus(panel)).toBe(false);
   });
 });
 

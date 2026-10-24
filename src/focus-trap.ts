@@ -77,10 +77,21 @@ export interface TrapFocusOptions {
   /**
    * Where focus goes on release when the element focused before the trap can
    * no longer take it (removed, hidden, disabled or inert meanwhile — e.g. a
-   * button a resize swapped for another): the first of these that can.
+   * button a resize swapped for another): the first of these that is shown,
+   * enabled, in the tab order, not aria-hidden, and actually takes focus.
    * Not used when nothing had focus before the trap.
    */
   returnFocus?: HTMLElement[];
+}
+
+/**
+ * True when focus is inside `container`, or nowhere in particular (body):
+ * closing the panel may then move it. False when something else holds it,
+ * such as a dialog opened from the panel.
+ */
+export function holdsFocus(container: HTMLElement): boolean {
+  const focused = document.activeElement;
+  return !focused || focused === document.body || container.contains(focused);
 }
 
 /**
