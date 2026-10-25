@@ -15,7 +15,7 @@ import { load } from "@tauri-apps/plugin-store";
 import { confirmDialog } from "./confirm-dialog";
 import { createDebugOverlay } from "./debug-overlay";
 import { addCopyButtons, addImageLightbox } from "./dom";
-import { trapFocus, type FocusTrap } from "./focus-trap";
+import { holdsFocus, trapFocus, type FocusTrap } from "./focus-trap";
 import {
   LOCALE_KEY,
   applyTranslations,
@@ -129,6 +129,9 @@ import { appMark, icon } from "./icons";
 
 const themeToggle = document.getElementById(
   "theme-toggle"
+) as HTMLButtonElement;
+const sidebarTheme = document.getElementById(
+  "sidebar-theme"
 ) as HTMLButtonElement;
 
 // The theme shown when not following macOS, and the light/dark pair used when
@@ -289,6 +292,7 @@ function applyActiveTheme(): void {
   applyThemeToDOM(themeCatalog, document.documentElement, id);
   const dark = themeCatalog[id]?.isDark ?? false;
   themeToggle.innerHTML = icon(dark ? "sun" : "moon");
+  sidebarTheme.innerHTML = themeToggle.innerHTML;
   mermaid.initialize({
     startOnLoad: false,
     theme: dark ? "dark" : "default",
@@ -486,6 +490,7 @@ const pdfBtn = document.getElementById("pdf-btn") as HTMLButtonElement;
 pdfBtn.addEventListener("click", exportPdf);
 
 themeToggle.addEventListener("click", toggleTheme);
+sidebarTheme.addEventListener("click", toggleTheme);
 
 let mermaidCounter = 0;
 
@@ -691,6 +696,7 @@ const searchBoxEl = document.getElementById("search-box") as HTMLDivElement;
 const navSpinner = document.getElementById("nav-spinner") as HTMLSpanElement;
 const srStatus = document.getElementById("sr-status") as HTMLSpanElement;
 const prefsBtn = document.getElementById("prefs-btn") as HTMLButtonElement;
+const sidebarPrefs = document.getElementById("sidebar-prefs") as HTMLButtonElement;
 const contentEl = document.getElementById("content") as HTMLDivElement;
 const contentLoading = document.getElementById(
   "content-loading"
@@ -978,15 +984,15 @@ function foldSearch(fromKeyboard = false): void {
   if (fromKeyboard && searchToggle.getClientRects().length > 0) searchToggle.focus();
 }
 
-// Same breakpoint as the CSS that folds the search field.
-const compactSearchMQ = window.matchMedia("(max-width: 1000px)");
-
 function focusSearch(): void {
   if (searchInput.disabled) {
     return;
   }
-  // In a narrow window the field is folded behind a button: unfold it first.
-  if (compactSearchMQ.matches) document.body.classList.add("search-open");
+  // In a narrow window the field is folded behind the search button (shown
+  // in its place, at a width that depends on the sidebar): unfold it first.
+  if (searchToggle.getClientRects().length > 0) {
+    document.body.classList.add("search-open");
+  }
   searchInput.focus();
   searchInput.select();
 }
@@ -1746,6 +1752,9 @@ function openPrefs(): void {
   // is the default first-focusable. Tabs are a more meaningful entry point.
   prefsFocusTrap = trapFocus(prefsBackdrop, {
     initialFocus: () => getActiveTabButton(),
+    // Opened from one Preferences button, closed after a resize swapped it for
+    // the other: focus goes to whichever is showing.
+    returnFocus: [prefsBtn, sidebarPrefs],
   });
 }
 
@@ -2088,6 +2097,8 @@ let sidebarOpener: HTMLElement | null = null;
 function setSidebarOpen(open: boolean): void {
   const wasOpen = document.body.classList.contains("sidebar-open");
   if (open === wasOpen) return;
+  // Before the page goes inert, which drops focus from the opener.
+  if (open) sidebarOpener = document.activeElement as HTMLElement | null;
   document.body.classList.toggle("sidebar-open", open);
   sidebarToggle.setAttribute("aria-expanded", String(open));
   sidebarScrim.hidden = !open;
@@ -2098,12 +2109,13 @@ function setSidebarOpen(open: boolean): void {
   if (open) {
     sidebarEl.setAttribute("role", "dialog");
     sidebarEl.setAttribute("aria-modal", "true");
-    sidebarOpener = document.activeElement as HTMLElement | null;
     (sidebarEl.querySelector<HTMLElement>(".file-item.active, .file-item") ?? sidebarClose).focus();
   } else {
     sidebarEl.removeAttribute("role");
     sidebarEl.removeAttribute("aria-modal");
-    focusVisible(sidebarOpener);
+    // Hand focus back unless something outside the panel holds it: a dialog
+    // opened from it (Preferences) keeps it when a resize closes the panel.
+    if (holdsFocus(sidebarEl)) focusVisible(sidebarOpener);
     sidebarOpener = null;
   }
 }
@@ -2312,6 +2324,7 @@ function initChrome(): void {
     foldSearch();
   });
   prefsBtn.addEventListener("click", openPrefs);
+  sidebarPrefs.addEventListener("click", openPrefs);
   folderSwitcher.addEventListener("click", (e) => {
     e.stopPropagation();
     if (folderMenu.hidden && !folderMenuOpening) void openFolderMenu();

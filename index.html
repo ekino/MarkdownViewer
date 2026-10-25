@@ -700,6 +700,118 @@
       color: var(--ui-ink-soft);
     }
 
+    #sidebar-footer {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 8px 10px;
+      border-top: 1px solid var(--ui-line);
+    }
+
+    #sidebar-prefs {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 7px 10px;
+      border: none;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--ui-ink);
+      font: 500 14px var(--ui-sys);
+      text-align: left;
+      cursor: pointer;
+    }
+
+    #sidebar-prefs:hover {
+      background: var(--ui-hover);
+    }
+
+    /* Docked sidebar: it runs the full height of the window, traffic lights
+       included, and the title bar sits over the content only. Screen only:
+       print and PDF export lay the document out on its own. */
+    @media screen and (min-width: 861px) {
+      body.has-folder:not([data-screen="home"]):not(.print-mode) #titlebar {
+        position: absolute;
+        top: 0;
+        left: var(--sidebar-width);
+        right: 0;
+        /* Above the folded outline (40), which opens under the bar: the
+           search options menu stacks within the bar and must cover it. */
+        z-index: 41;
+        padding-left: 16px;
+        /* Search folds on the bar's own width (see below), whatever the
+           sidebar's. */
+        container: titlebar / inline-size;
+      }
+
+      body.has-folder:not([data-screen="home"]):not(.print-mode) #main {
+        padding-top: 52px;
+      }
+
+      body.has-folder:not([data-screen="home"]):not(.print-mode) #sidebar {
+        margin-top: -52px;
+        padding-top: 52px;
+      }
+
+      /* Preferences and the theme switch move to the sidebar's foot. */
+      body.has-folder:not([data-screen="home"]):not(.print-mode) #theme-toggle,
+      body.has-folder:not([data-screen="home"]):not(.print-mode) #prefs-btn {
+        display: none;
+      }
+
+      /* The title bar loses the sidebar's width: the search box shrinks
+         rather than push the actions out of the window. */
+      body.has-folder:not([data-screen="home"]):not(.print-mode) #titlebar-actions,
+      body.has-folder:not([data-screen="home"]):not(.print-mode) #search-box {
+        min-width: 0;
+        flex-shrink: 1;
+      }
+
+      body.has-folder:not([data-screen="home"]):not(.print-mode) #search-input {
+        min-width: 30px;
+        flex: 0 1 auto;
+      }
+
+      /* The path gives way first, whatever its length: the actions barely
+         shrink until it is gone. */
+      body.has-folder:not([data-screen="home"]):not(.print-mode) #breadcrumb {
+        flex-shrink: 1000;
+      }
+
+      /* The field gives way, never the match count. */
+      body.has-folder:not([data-screen="home"]):not(.print-mode) #search-counter {
+        flex-shrink: 0;
+      }
+    }
+
+    /* The title bar is the sidebar's width narrower than the window: search
+       folds into a button as it does in a window below 1000px without a
+       sidebar. 971px = 1000px less the bar's 16px + 13px side padding, as a
+       container query measures the content box. */
+    @container titlebar (max-width: 971px) {
+      body.has-folder:not([data-screen="home"]):not(.print-mode)[data-screen="doc"] #search-toggle {
+        display: inline-flex;
+      }
+
+      body.has-folder:not([data-screen="home"]):not(.print-mode)[data-screen="doc"] #search-box {
+        display: none;
+      }
+
+      body.has-folder:not([data-screen="home"]):not(.print-mode)[data-screen="doc"].search-open #search-box {
+        display: flex;
+      }
+
+      body.has-folder:not([data-screen="home"]):not(.print-mode).search-open #search-toggle {
+        display: none;
+      }
+
+      body.has-folder:not([data-screen="home"]):not(.print-mode) #search-input {
+        width: 150px;
+      }
+    }
+
     #sidebar-scrim {
       position: fixed;
       inset: 0;
@@ -2112,6 +2224,12 @@
         display: inline-flex;
       }
 
+      /* The title bar keeps Preferences and the theme switch: no copy in the
+         overlaid sidebar's foot. */
+      #sidebar-footer {
+        display: none;
+      }
+
       body.has-folder:not([data-screen="home"]) #sidebar {
         position: fixed;
         top: 0;
@@ -2129,7 +2247,8 @@
           visibility 0.18s;
       }
 
-      body.sidebar-open #sidebar {
+      /* As specific as the closed state above, or it never applies. */
+      body.has-folder.sidebar-open:not([data-screen="home"]) #sidebar {
         transform: none;
         visibility: visible;
       }
@@ -3150,7 +3269,7 @@
 
     <div id="main">
       <div id="sidebar-scrim" hidden></div>
-      <aside id="sidebar" data-i18n-aria-label="sidebar.documents">
+      <aside id="sidebar" data-tauri-drag-region data-i18n-aria-label="sidebar.documents">
         <div id="sidebar-header">
           <button id="folder-switcher" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="folder-menu">
             <span class="fs-text">
@@ -3169,6 +3288,13 @@
           <span id="sidebar-count"></span>
         </div>
         <div id="file-list"></div>
+        <div id="sidebar-footer">
+          <button id="sidebar-prefs" type="button">
+            <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>
+            <span data-i18n="titlebar.preferences">Préférences</span>
+          </button>
+          <button id="sidebar-theme" class="icon-btn" type="button" data-i18n-title="titlebar.theme" data-i18n-aria-label="titlebar.theme"></button>
+        </div>
       </aside>
 
       <section id="home" data-i18n-aria-label="nav.home"></section>

@@ -32,6 +32,13 @@ function isVisiblyFocusable(el: HTMLElement): boolean {
   if (el.hasAttribute("disabled")) return false;
   if (el.getAttribute("aria-hidden") === "true") return false;
   if (el.tabIndex < 0) return false;
+  return isRendered(el);
+}
+
+/**
+ * False when `el` or an ancestor is display:none or visibility:hidden.
+ */
+function isRendered(el: HTMLElement): boolean {
   // Walk up the tree and reject the element if any ancestor (or itself) is
   // display:none or visibility:hidden. This is robust across jsdom and real
   // browsers; offsetParent is unreliable in jsdom for visible elements.
@@ -67,6 +74,24 @@ export interface TrapFocusOptions {
    * choice for tabbed modals where the active tab is the natural target.
    */
   initialFocus?: HTMLElement | (() => HTMLElement | null | undefined) | null;
+  /**
+   * Where focus goes on release when the element focused before the trap can
+   * no longer take it (removed, hidden, disabled or inert meanwhile — e.g. a
+   * button a resize swapped for another): the first of these that is shown,
+   * enabled, in the tab order, not aria-hidden, and actually takes focus.
+   * Not used when nothing had focus before the trap.
+   */
+  returnFocus?: HTMLElement[];
+}
+
+/**
+ * True when focus is inside `container`, or nowhere in particular (body):
+ * closing the panel may then move it. False when something else holds it,
+ * such as a dialog opened from the panel.
+ */
+export function holdsFocus(container: HTMLElement): boolean {
+  const focused = document.activeElement;
+  return !focused || focused === document.body || container.contains(focused);
 }
 
 /**
@@ -161,8 +186,18 @@ export function trapFocus(
     },
     release() {
       container.removeEventListener("keydown", onKeyDown);
-      if (previouslyFocused && document.body.contains(previouslyFocused)) {
+      if (!previouslyFocused || previouslyFocused === document.body) return;
+      if (
+        document.body.contains(previouslyFocused) &&
+        isRendered(previouslyFocused)
+      ) {
         previouslyFocused.focus();
+        if (document.activeElement === previouslyFocused) return;
+      }
+      for (const el of options.returnFocus ?? []) {
+        if (!document.body.contains(el) || !isVisiblyFocusable(el)) continue;
+        el.focus();
+        if (document.activeElement === el) return;
       }
     },
   };
