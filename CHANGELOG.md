@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.12.1](https://github.com/ekino/MarkdownViewer/releases/tag/v0.12.1) - 2026-10-25
+
+### Changed
+
+- The docked sidebar runs the full height of the window, traffic lights included; the title bar covers the content only
+- Preferences and the light/dark switch move to the foot of the docked sidebar; the title bar keeps them in a narrow window
+- With the sidebar docked, search folds into a button when the title bar runs short of room; ⌘F unfolds it
+
+### Fixed
+
+- In a narrow window (860px or less), the sidebar button showed only the backdrop and left the sidebar off screen
+
 ## [0.12.0](https://github.com/ekino/MarkdownViewer/releases/tag/v0.12.0) - 2026-10-16
 
 ### Added
